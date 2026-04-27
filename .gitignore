@@ -6,3 +6,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.parquet
+*.json
+config/gcp-key.json
+.pytest_cache/
+**/__pycache__/
+*.pyo
+.DS_Store
+config/gcp-key.json
+quant_fund.egg-info/
