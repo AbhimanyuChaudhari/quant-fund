@@ -11,20 +11,20 @@ from dotenv import load_dotenv
 from kiteconnect import KiteTicker
 from src.utils.auth import get_kite_client
 from src.storage.gcs import upload_dataframe
-from config.symbols import SYMBOLS, TOKEN_TO_SYMBOL
+from config.symbols import get_active_symbols, get_token_map
 
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
-# ─────────────────────────────────────
-# Config
-# ─────────────────────────────────────
-FLUSH_INTERVAL = 60  # seconds
-TOKENS         = [s["instrument_token"] for s in SYMBOLS]
+FLUSH_INTERVAL = 60
 
-# ─────────────────────────────────────
+# Fetch active symbols at startup — auto handles rollover
+kite           = get_kite_client()
+SYMBOLS        = get_active_symbols(kite)
+TOKEN_TO_SYMBOL = get_token_map(SYMBOLS)
+TOKENS         = list(TOKEN_TO_SYMBOL.keys())
+
 # RAM buffer
-# ─────────────────────────────────────
 buffer      = []
 buffer_lock = threading.Lock()
 
