@@ -41,7 +41,7 @@ class ZerodhaBroker(BaseBroker):
         self.kite.set_access_token(self.access_token)
         print("Zerodha login successful.")
 
-    def get_active_symbols(self) -> list[dict]:
+    def get_active_symbols(self, tier: str = "all") -> list[dict]:
         instruments = pd.DataFrame(self.kite.instruments("NFO"))
         futures     = instruments[
             instruments["instrument_type"] == "FUT"
@@ -50,8 +50,17 @@ class ZerodhaBroker(BaseBroker):
 
         today  = pd.Timestamp(date.today())
         active = []
+        from config.symbols import INDEX_FUTURES, STOCK_FUTURES_TIER1, STOCK_FUTURES_TIER2, ALL_FUTURES
+        if tier == "index":
+            track = INDEX_FUTURES
+        elif tier == "tier1":
+            track = INDEX_FUTURES + STOCK_FUTURES_TIER1
+        elif tier == "tier2":
+            track = STOCK_FUTURES_TIER2
+        else:
+            track = ALL_FUTURES
 
-        for underlying in FUTURES_TO_TRACK:
+        for underlying in track:
             contracts = futures[
                 futures["tradingsymbol"].str.startswith(underlying + "2")
             ].copy()

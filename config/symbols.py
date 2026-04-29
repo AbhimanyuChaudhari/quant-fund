@@ -1,8 +1,10 @@
 from datetime import date
 import pandas as pd
 
-# These never change — the underlying instruments
-FUTURES_TO_TRACK = [
+# ─────────────────────────────────────
+# Index futures — always track
+# ─────────────────────────────────────
+INDEX_FUTURES = [
     "NIFTY",
     "BANKNIFTY",
     "FINNIFTY",
@@ -10,38 +12,76 @@ FUTURES_TO_TRACK = [
     "NIFTYNXT50",
 ]
 
+# ─────────────────────────────────────
+# Top 50 most liquid stock futures
+# Sorted by typical OI and volume
+# ─────────────────────────────────────
+STOCK_FUTURES_TIER1 = [
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+    "HINDUNILVR", "SBIN", "BAJFINANCE", "BHARTIARTL", "KOTAKBANK",
+    "LT", "AXISBANK", "WIPRO", "HCLTECH", "MARUTI",
+    "SUNPHARMA", "TATAMOTORS", "TATASTEEL", "NTPC", "POWERGRID",
+    "ULTRACEMCO", "TECHM", "BAJAJFINSV", "TITAN", "NESTLEIND",
+    "ADANIENT", "ADANIPORTS", "COALINDIA", "ONGC", "JSWSTEEL",
+    "GRASIM", "INDUSINDBK", "DIVISLAB", "DRREDDY", "CIPLA",
+    "EICHERMOT", "HEROMOTOCO", "APOLLOHOSP", "TATACONSUM", "BRITANNIA",
+    "BPCL", "IOC", "HINDALCO", "VEDL", "SAIL",
+    "PNB", "BANKBARODA", "CANBK", "FEDERALBNK", "IDFCFIRSTB",
+]
 
-def get_active_symbols(kite) -> list[dict]:
+# ─────────────────────────────────────
+# All F&O stocks — collect everything
+# ─────────────────────────────────────
+STOCK_FUTURES_TIER2 = [
+    "AUROPHARMA", "BIOCON", "CADILAHC", "LUPIN", "TORNTPHARM",
+    "ALKEM", "ABBOTINDIA", "PFIZER", "GLAXO", "SANOFI",
+    "MOTHERSON", "BALKRISIND", "EXIDEIND", "AMARAJABAT", "MINDA",
+    "ASHOKLEY", "TVSMOTOR", "BAJAJ-AUTO", "M&M", "ESCORTS",
+    "DLF", "GODREJPROP", "OBEROIRLTY", "PRESTIGE", "PHOENIXLTD",
+    "HAVELLS", "VOLTAS", "BLUESTARCO", "CROMPTON", "POLYCAB",
+    "PIDILITIND", "ASIANPAINT", "BERGERPAINTS", "KANSAINER", "AKZOINDIA",
+    "MUTHOOTFIN", "CHOLAFIN", "BAJAJHLDNG", "LICHSGFIN", "RECLTD",
+    "PFC", "IRFC", "HUDCO", "NBCC", "BEL",
+    "HAL", "BDL", "COCHINSHIP", "GRSE", "MAZAGON",
+]
+
+# Combined — everything
+ALL_FUTURES = INDEX_FUTURES + STOCK_FUTURES_TIER1 + STOCK_FUTURES_TIER2
+
+
+def get_active_symbols(kite, tier: str = "all") -> list[dict]:
     """
-    Fetches current NFO instruments from Zerodha and returns
-    the nearest expiry futures contract for each symbol.
-    Automatically handles rollover — always picks front month.
+    Fetch nearest expiry futures for specified tier.
+    tier: "index", "tier1", "tier2", "all"
     """
+    if tier == "index":
+        track = INDEX_FUTURES
+    elif tier == "tier1":
+        track = INDEX_FUTURES + STOCK_FUTURES_TIER1
+    elif tier == "tier2":
+        track = STOCK_FUTURES_TIER2
+    else:
+        track = ALL_FUTURES
+
     instruments = pd.DataFrame(kite.instruments("NFO"))
-    
-    # Filter to futures only
-    futures = instruments[instruments["instrument_type"] == "FUT"].copy()
+    futures     = instruments[
+        instruments["instrument_type"] == "FUT"
+    ].copy()
     futures["expiry"] = pd.to_datetime(futures["expiry"])
-    
+
     today  = pd.Timestamp(date.today())
     active = []
 
-    for underlying in FUTURES_TO_TRACK:
-        # Get all futures for this underlying
+    for underlying in track:
         contracts = futures[
-            futures["tradingsymbol"].str.startswith(underlying + "2")
+            futures["tradingsymbol"].str.startswith(underlying)
         ].copy()
-
-        # Filter out expired contracts
         valid = contracts[contracts["expiry"] >= today]
 
         if valid.empty:
-            print(f"[WARN] No valid contracts found for {underlying}")
             continue
 
-        # Pick nearest expiry
         nearest = valid.sort_values("expiry").iloc[0]
-
         active.append({
             "tradingsymbol":    nearest["tradingsymbol"],
             "instrument_token": int(nearest["instrument_token"]),
@@ -50,12 +90,10 @@ def get_active_symbols(kite) -> list[dict]:
             "lot_size":         int(nearest["lot_size"]),
         })
 
-        print(f"Active contract: {nearest['tradingsymbol']} "
-              f"(expires {nearest['expiry'].strftime('%Y-%m-%d')})")
-
+    print(f"Active symbols: {len(active)} contracts")
     return active
 
 
 def get_token_map(active_symbols: list[dict]) -> dict:
-    """Returns {instrument_token: tradingsymbol} lookup."""
-    return {s["instrument_token"]: s["tradingsymbol"] for s in active_symbols}
+    return {s["instrument_token"]: s["tradingsymbol"]
+            for s in active_symbols}

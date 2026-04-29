@@ -18,7 +18,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 # Config — change this one line to
 # switch brokers
 # ─────────────────────────────────────
-ACTIVE_BROKER = "shoonya"  # "zerodha" or "shoonya"
+ACTIVE_BROKER = "zerodha"  # "zerodha" or "shoonya"
 FLUSH_INTERVAL = 60
 
 # ─────────────────────────────────────
@@ -255,7 +255,7 @@ def run_collector():
     broker.login()
 
     # Get active symbols
-    symbols         = broker.get_active_symbols()
+    symbols = broker.get_active_symbols(tier="all")
     TOKEN_TO_SYMBOL = {s["instrument_token"]: s["tradingsymbol"]
                        for s in symbols}
     TOKENS          = list(TOKEN_TO_SYMBOL.keys())
