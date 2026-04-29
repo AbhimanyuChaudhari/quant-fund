@@ -18,7 +18,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 # Config — change this one line to
 # switch brokers
 # ─────────────────────────────────────
-ACTIVE_BROKER = "zerodha"  # "zerodha" or "shoonya"
+ACTIVE_BROKER = "shoonya"  # "zerodha" or "shoonya"
 FLUSH_INTERVAL = 60
 
 # ─────────────────────────────────────
