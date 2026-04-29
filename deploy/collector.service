@@ -1,0 +1,18 @@
+[Unit]
+Description=Market Data Collector
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+User=abhim
+WorkingDirectory=/home/abhim/quant-fund
+Environment=GCP_PROJECT_ID=hedge-fund-494103
+ExecStart=/home/abhim/quant-fund/venv/bin/python3 src/collection/collector.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
