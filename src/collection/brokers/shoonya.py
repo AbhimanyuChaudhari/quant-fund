@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
 import pandas as pd
-from NorenRestApiPy.NorenApi import NorenApi
+# from NorenRestApiPy.NorenApi import NorenApi
 from src.collection.brokers.base import BaseBroker
 from src.utils.auth import get_secret
 
@@ -21,18 +21,11 @@ FUTURES_TO_TRACK = [
 ]
 
 
-class ShoonyaApi(NorenApi):
-    def __init__(self):
-        super().__init__(
-            host="https://api.shoonya.com/NorenWClientTP/",
-            websocket="wss://api.shoonya.com/NorenWSTP/"
-        )
-
-
 class ShoonyaBroker(BaseBroker):
 
     def __init__(self):
-        self.api         = ShoonyaApi()
+        from src.collection.brokers.api_helper import ShoonyaApiPy
+        self.api     = ShoonyaApiPy()
         self.user_id     = None
         self.instruments = None
 
