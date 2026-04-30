@@ -2,7 +2,8 @@ import schedule
 import time
 from datetime import datetime, timedelta
 from src.storage.gcs import list_files
-from src.processing.pipeline import run_pipeline
+from src.processing.duckdb_pipeline import run_pipeline
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def get_unprocessed_jobs() -> list[tuple]:
@@ -37,11 +38,8 @@ def get_unprocessed_jobs() -> list[tuple]:
     pending = raw_jobs - processed_jobs
     return sorted(pending)
 
-
 def run_daily_processing():
-    """Run processing pipeline for all pending symbol/date pairs."""
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-          f"Starting daily processing...")
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting daily processing...")
 
     pending = get_unprocessed_jobs()
 
@@ -49,15 +47,20 @@ def run_daily_processing():
         print("Nothing to process.")
         return
 
-    print(f"Found {len(pending)} pending jobs:")
-    for symbol, date in pending:
-        print(f"  {symbol} | {date}")
+    print(f"Found {len(pending)} pending jobs. Running with 8 parallel workers...")
 
-    for symbol, date in pending:
+    def process_job(job):
+        symbol, date = job
         try:
             run_pipeline(symbol, date)
+            return f"OK: {symbol} | {date}"
         except Exception as e:
-            print(f"[ERROR] {symbol} | {date}: {e}")
+            return f"ERROR: {symbol} | {date}: {e}"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(process_job, job): job for job in pending}
+        for future in as_completed(futures):
+            print(future.result())
 
     print(f"\nDaily processing complete.")
 
