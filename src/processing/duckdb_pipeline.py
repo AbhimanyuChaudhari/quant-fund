@@ -3,10 +3,7 @@ import io
 import duckdb
 import gcsfs
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from pathlib import Path
-from datetime import datetime
 from dotenv import load_dotenv
 from src.storage.gcs import get_bucket
 
@@ -28,7 +25,8 @@ def get_duckdb_con():
 def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
     """
     Build 1-second bars + microstructure features in one DuckDB query.
-    Reads directly from GCS — no download needed.
+    Reads raw ticks directly from GCS — no download needed.
+    Clean output: no duplicate columns, no _x/_y suffixes.
     """
     con      = get_duckdb_con()
     gcs_path = f"gs://{BUCKET_NAME}/raw/orderbook/{symbol}/{date}/*.parquet"
@@ -58,64 +56,79 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
                 bid_p1, bid_q1,
                 ask_p1, ask_q1,
                 (bid_p1 * ask_q1 + ask_p1 * bid_q1) /
-                    NULLIF(bid_q1 + ask_q1, 0) AS weighted_mid,
-                ABS(last_price - mid_price)   AS price_impact,
+                    NULLIF(bid_q1 + ask_q1, 0)        AS weighted_mid,
+                ABS(last_price - mid_price)            AS price_impact,
                 spread / NULLIF(mid_price, 0) * 10000 AS spread_bps
             FROM read_parquet('{gcs_path}')
             WHERE last_price > 0
         ),
+
         bars AS (
             SELECT
                 symbol,
                 ts_sec,
-                FIRST(last_price)    AS open,
-                MAX(last_price)      AS high,
-                MIN(last_price)      AS low,
-                LAST(last_price)     AS close,
-                LAST(volume)         AS volume,
-                COUNT(*)             AS tick_count,
-                LAST(avg_price)      AS vwap,
-                LAST(oi)             AS oi,
-
-                -- Spread features
-                AVG(spread)          AS spread_mean,
-                MAX(spread)          AS spread_max,
-                AVG(spread_bps)      AS spread_bps,
-
-                -- Imbalance features
-                AVG(book_imbalance)  AS imbalance_mean,
-                STDDEV(book_imbalance) AS imbalance_std,
-                LAST(book_imbalance) AS imbalance_last,
-
-                -- Depth features
-                LAST(total_bid_qty)  AS total_bid_qty,
-                LAST(total_ask_qty)  AS total_ask_qty,
-
-                -- Weighted mid
-                LAST(weighted_mid)   AS weighted_mid,
-
-                -- Price impact
-                AVG(price_impact)    AS price_impact
+                FIRST(last_price)        AS open,
+                MAX(last_price)          AS high,
+                MIN(last_price)          AS low,
+                LAST(last_price)         AS close,
+                LAST(volume)             AS volume,
+                COUNT(*)                 AS tick_count,
+                LAST(avg_price)          AS vwap,
+                LAST(oi)                 AS oi,
+                AVG(spread)              AS spread_mean,
+                MAX(spread)              AS spread_max,
+                AVG(spread_bps)          AS spread_bps,
+                AVG(book_imbalance)      AS imbalance_mean,
+                STDDEV(book_imbalance)   AS imbalance_std,
+                LAST(book_imbalance)     AS imbalance_last,
+                LAST(total_bid_qty)      AS total_bid_qty,
+                LAST(total_ask_qty)      AS total_ask_qty,
+                LAST(weighted_mid)       AS weighted_mid,
+                AVG(price_impact)        AS price_impact
             FROM raw
             GROUP BY symbol, ts_sec
             ORDER BY ts_sec
+        ),
+
+        with_returns AS (
+            SELECT
+                *,
+                (close - LAG(close) OVER (ORDER BY ts_sec)) /
+                    NULLIF(LAG(close) OVER (ORDER BY ts_sec), 0) AS returns
+            FROM bars
         )
+
         SELECT
             symbol,
             ts_sec,
-            epoch_ms(CAST(ts_sec * 1000 AS BIGINT)) AS ts_utc,
+            -- Human readable timestamp (IST)
+            strftime(
+                epoch_ms(CAST(ts_sec * 1000 AS BIGINT)) AT TIME ZONE 'Asia/Kolkata',
+                '%Y-%m-%d %H:%M:%S'
+            ) AS ts_ist,
+
             open, high, low, close,
             volume, tick_count, vwap, oi,
+
+            -- Spread
             spread_mean, spread_max, spread_bps,
+
+            -- Imbalance
             imbalance_mean, imbalance_std, imbalance_last,
+
+            -- Depth
             total_bid_qty, total_ask_qty,
             weighted_mid, price_impact,
 
-            -- Returns
-            (close - LAG(close) OVER (ORDER BY ts_sec)) /
-                NULLIF(LAG(close) OVER (ORDER BY ts_sec), 0) AS returns,
+            -- Rolling volatility (annualized to per-second scale)
+            STDDEV(close) OVER (
+                ORDER BY ts_sec ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
+            ) AS realized_vol_10s,
 
-            -- Rolling volatility
+            STDDEV(close) OVER (
+                ORDER BY ts_sec ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+            ) AS realized_vol_30s,
+
             STDDEV(close) OVER (
                 ORDER BY ts_sec ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
             ) AS realized_vol_60s,
@@ -124,7 +137,7 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
                 ORDER BY ts_sec ROWS BETWEEN 299 PRECEDING AND CURRENT ROW
             ) AS realized_vol_300s,
 
-            -- Rolling imbalance
+            -- Rolling imbalance MAs
             AVG(imbalance_last) OVER (
                 ORDER BY ts_sec ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
             ) AS imbalance_ma_10s,
@@ -136,6 +149,13 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             AVG(imbalance_last) OVER (
                 ORDER BY ts_sec ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
             ) AS imbalance_ma_60s,
+
+            -- Spread z-score (300s rolling)
+            (spread_mean - AVG(spread_mean) OVER (
+                ORDER BY ts_sec ROWS BETWEEN 299 PRECEDING AND CURRENT ROW
+            )) / NULLIF(STDDEV(spread_mean) OVER (
+                ORDER BY ts_sec ROWS BETWEEN 299 PRECEDING AND CURRENT ROW
+            ), 0) AS spread_zscore,
 
             -- Volume ratio
             tick_count / NULLIF(
@@ -154,15 +174,17 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             (close - LAG(close, 60) OVER (ORDER BY ts_sec)) /
                 NULLIF(LAG(close, 60) OVER (ORDER BY ts_sec), 0) AS price_mom_60s
 
-        FROM bars
+        FROM with_returns
+        ORDER BY ts_sec
+
     """).df()
 
-    print(f"Built {len(df):,} bars for {symbol} | {date}")
+    print(f"Built {len(df):,} bars | {len(df.columns)} columns | {symbol} | {date}")
     return df
 
 
 def save_processed(df: pd.DataFrame, symbol: str, date: str):
-    """Save processed features to GCS."""
+    """Save processed features to GCS, overwriting any existing file."""
     if df.empty:
         return
 
@@ -174,32 +196,34 @@ def save_processed(df: pd.DataFrame, symbol: str, date: str):
     blob_name = f"processed/features/{symbol}/{date}.parquet"
     blob      = bucket.blob(blob_name)
     blob.upload_from_file(buf, content_type="application/octet-stream")
-    print(f"Saved → GCS: {blob_name}")
+    print(f"Saved → gs://{bucket.name}/{blob_name}")
 
 
 def run_pipeline(symbol: str, date: str):
-    """Full pipeline — DuckDB reads GCS, saves features back to GCS."""
+    """Full pipeline — raw ticks → features → GCS."""
     print(f"\n{'='*50}")
     print(f"Processing: {symbol} | {date}")
     print(f"{'='*50}")
 
     df = build_features_duckdb(symbol, date)
     if df.empty:
-        return
+        return None
 
     save_processed(df, symbol, date)
     return df
 
 
 if __name__ == "__main__":
-    # Test on one symbol
     import time
-    start = time.time()
-    df = run_pipeline("NIFTY26MAYFUT", "2026-04-30")
-    elapsed = time.time() - start
 
-    if df is not None:
-        print(f"\nCompleted in {elapsed:.1f} seconds")
-        print(f"Columns: {len(df.columns)}")
-        print(df[["ts_utc", "open", "close", "spread_mean",
-                   "imbalance_last", "realized_vol_60s"]].head(10).to_string())
+    # Reprocess NIFTY to overwrite dirty parquets with clean ones
+    for date in ["2026-04-29", "2026-04-30"]:
+        start = time.time()
+        df    = run_pipeline("NIFTY26MAYFUT", date)
+        elapsed = time.time() - start
+
+        if df is not None:
+            print(f"Completed in {elapsed:.1f}s")
+            print(df[["ts_ist", "open", "close", "spread_mean",
+                       "imbalance_last", "realized_vol_60s",
+                       "spread_zscore"]].head(5).to_string())
