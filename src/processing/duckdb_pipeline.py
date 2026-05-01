@@ -26,12 +26,11 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
     """
     Build 1-second bars + microstructure features in one DuckDB query.
     Reads raw ticks directly from GCS — no download needed.
-    Clean output: no duplicate columns, no _x/_y suffixes.
+    Clean output: no duplicate columns, no _x/_y suffixes, correct timestamps.
     """
     con      = get_duckdb_con()
     gcs_path = f"gs://{BUCKET_NAME}/raw/orderbook/{symbol}/{date}/*.parquet"
 
-    # Check files exist
     fs    = gcsfs.GCSFileSystem(project=PROJECT_ID)
     files = fs.glob(f"{BUCKET_NAME}/raw/orderbook/{symbol}/{date}/*.parquet")
     if not files:
@@ -41,8 +40,8 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
     df = con.execute(f"""
         WITH raw AS (
             SELECT
-                ts_local_ns,
-                ts_local_ns / 1000000000 AS ts_sec,
+                -- INTEGER division to avoid float precision loss
+                (ts_local_ns // 1000000000)::BIGINT AS ts_sec,
                 symbol,
                 last_price,
                 volume,
@@ -88,22 +87,15 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             FROM raw
             GROUP BY symbol, ts_sec
             ORDER BY ts_sec
-        ),
-
-        with_returns AS (
-            SELECT
-                *,
-                (close - LAG(close) OVER (ORDER BY ts_sec)) /
-                    NULLIF(LAG(close) OVER (ORDER BY ts_sec), 0) AS returns
-            FROM bars
         )
 
         SELECT
             symbol,
             ts_sec,
-            -- Human readable timestamp (IST)
+
+            -- Readable timestamp in IST
             strftime(
-                epoch_ms(CAST(ts_sec * 1000 AS BIGINT)) AT TIME ZONE 'Asia/Kolkata',
+                (epoch_ms(ts_sec * 1000) AT TIME ZONE 'Asia/Kolkata'),
                 '%Y-%m-%d %H:%M:%S'
             ) AS ts_ist,
 
@@ -120,7 +112,7 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             total_bid_qty, total_ask_qty,
             weighted_mid, price_impact,
 
-            -- Rolling volatility (annualized to per-second scale)
+            -- Rolling volatility
             STDDEV(close) OVER (
                 ORDER BY ts_sec ROWS BETWEEN 9 PRECEDING AND CURRENT ROW
             ) AS realized_vol_10s,
@@ -174,7 +166,7 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             (close - LAG(close, 60) OVER (ORDER BY ts_sec)) /
                 NULLIF(LAG(close, 60) OVER (ORDER BY ts_sec), 0) AS price_mom_60s
 
-        FROM with_returns
+        FROM bars
         ORDER BY ts_sec
 
     """).df()
@@ -216,10 +208,9 @@ def run_pipeline(symbol: str, date: str):
 if __name__ == "__main__":
     import time
 
-    # Reprocess NIFTY to overwrite dirty parquets with clean ones
     for date in ["2026-04-29", "2026-04-30"]:
-        start = time.time()
-        df    = run_pipeline("NIFTY26MAYFUT", date)
+        start   = time.time()
+        df      = run_pipeline("NIFTY26MAYFUT", date)
         elapsed = time.time() - start
 
         if df is not None:
