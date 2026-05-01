@@ -10,7 +10,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from src.storage.gcs import upload_dataframe
 from src.collection.brokers import ZerodhaBroker, ShoonyaBroker
-from config.symbols import get_active_options
+from config.symbols import get_active_options, get_active_currency
 
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -18,17 +18,24 @@ load_dotenv(dotenv_path=ENV_PATH)
 # ─────────────────────────────────────
 # Config
 # ─────────────────────────────────────
-ACTIVE_BROKER  = "zerodha"   # "zerodha" or "shoonya"
-FLUSH_INTERVAL = 60
+ACTIVE_BROKER       = "zerodha"
+FLUSH_INTERVAL      = 60
 
-# Options config — which underlyings and how many expiries
+COLLECT_OPTIONS     = True
+OPTIONS_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
+OPTIONS_EXPIRIES    = 1        # nearest expiry only
+
+# Currency config
+COLLECT_CURRENCY  = True
+CURRENCY_PAIRS    = ["USDINR"]   # add EURINR, GBPINR later
+CURRENCY_OPTIONS  = False        # futures only for now
+CURRENCY_EXPIRIES = 2            # nearest 2 expiries
+
+# Spot index tokens (NSE index quotes, not tradeable)
 SPOT_SYMBOLS = {
     256265: "NIFTY_SPOT",
     260105: "BANKNIFTY_SPOT",
 }
-COLLECT_OPTIONS    = True
-OPTIONS_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
-OPTIONS_EXPIRIES    = 1        # nearest expiry only
 
 # ─────────────────────────────────────
 # RAM buffer
@@ -214,10 +221,14 @@ def make_on_connect(broker, broker_name: str):
     def on_connect(ws, response):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Connected.")
         broker.subscribe(TOKENS)
-        symbols = [TOKEN_TO_SYMBOL.get(t, t) for t in TOKENS]
+        symbols   = [TOKEN_TO_SYMBOL.get(t, t) for t in TOKENS]
+        futures   = [s for s in symbols if s.endswith("FUT")]
+        options   = [s for s in symbols if s.endswith(("CE", "PE"))]
+        spots     = [s for s in symbols if s.endswith("_SPOT")]
         print(f"Subscribed to {len(symbols)} instruments")
-        print(f"  Futures: {[s for s in symbols if 'FUT' in s]}")
-        print(f"  Options: {len([s for s in symbols if s.endswith(('CE','PE'))])} contracts")
+        print(f"  Futures: {len(futures)}")
+        print(f"  Options: {len(options)}")
+        print(f"  Spots:   {spots}")
     return on_connect
 
 
@@ -266,13 +277,25 @@ def run_collector():
         )
         print(f"Options:  {len(options_symbols)} contracts")
 
-    # ── Combine futures + options first ───────────────
-    all_symbols     = futures_symbols + options_symbols
+    # ── Currency symbols ─────────────────────────────
+    currency_symbols = []
+    if COLLECT_CURRENCY:
+        currency_symbols = get_active_currency(
+            broker.kite,
+            pairs           = CURRENCY_PAIRS,
+            include_options = CURRENCY_OPTIONS,
+            num_expiries    = CURRENCY_EXPIRIES,
+        )
+        print(f"Currency: {len(currency_symbols)} contracts")
+
+    # ── Combine all ───────────────────────────────────
+    all_symbols     = futures_symbols + options_symbols + currency_symbols
     TOKEN_TO_SYMBOL = {s["instrument_token"]: s["tradingsymbol"]
                        for s in all_symbols}
 
-    # ── Add spot indices AFTER ─────────────────────────
+    # ── Add spot indices ──────────────────────────────
     TOKEN_TO_SYMBOL.update(SPOT_SYMBOLS)
+
     TOKENS = list(TOKEN_TO_SYMBOL.keys())
 
     print(f"Spots:    {list(SPOT_SYMBOLS.values())}")

@@ -241,3 +241,147 @@ if __name__ == "__main__":
               f"type={s['instrument_type']} token={s['instrument_token']}")
 
     print(f"\nTotal instruments: {len(futures) + len(options)}")
+
+
+# ─────────────────────────────────────
+# Currency config
+# ─────────────────────────────────────
+CURRENCY_CONFIG = {
+    "USDINR": {
+        "strikes_each_side": 8,      # ATM ± 8 strikes
+        "strike_interval":   0.25,   # 0.25 paise intervals
+        "lot_size":          1000,   # 1000 USD actual
+        "exchange":          "CDS",
+    },
+    "EURINR": {
+        "strikes_each_side": 5,
+        "strike_interval":   0.25,
+        "lot_size":          1000,
+        "exchange":          "CDS",
+    },
+    "GBPINR": {
+        "strikes_each_side": 5,
+        "strike_interval":   0.25,
+        "lot_size":          1000,
+        "exchange":          "CDS",
+    },
+}
+
+
+def get_active_currency(kite,
+                        pairs: list[str] = ["USDINR"],
+                        include_options: bool = False,
+                        num_expiries: int = 2) -> list[dict]:
+    """
+    Fetch active currency futures (and optionally options).
+
+    Args:
+        kite:            authenticated KiteConnect client
+        pairs:           currency pairs e.g. ['USDINR', 'EURINR']
+        include_options: also fetch ATM options
+        num_expiries:    number of expiries to collect
+
+    Returns:
+        List of dicts same structure as get_active_symbols()
+    """
+    instruments = pd.DataFrame(kite.instruments("CDS"))
+    instruments["expiry"] = pd.to_datetime(instruments["expiry"])
+
+    today  = pd.Timestamp(date.today())
+    active = []
+
+    for pair in pairs:
+        cfg = CURRENCY_CONFIG.get(pair)
+        if not cfg:
+            print(f"No config for {pair}, skipping")
+            continue
+
+        # ── Futures ───────────────────────────────────
+        futures = instruments[
+            (instruments["name"] == pair) &
+            (instruments["instrument_type"] == "FUT") &
+            (instruments["expiry"] >= today)
+        ].sort_values("expiry")
+
+        for _, row in futures.head(num_expiries).iterrows():
+            active.append({
+                "tradingsymbol":    row["tradingsymbol"],
+                "instrument_token": int(row["instrument_token"]),
+                "exchange":         cfg["exchange"],
+                "expiry":           row["expiry"].strftime("%Y-%m-%d"),
+                "lot_size":         cfg["lot_size"],
+                "instrument_type":  "FUT",
+                "underlying":       pair,
+            })
+
+        # ── Options (optional) ────────────────────────
+        if not include_options:
+            continue
+
+        options = instruments[
+            (instruments["name"] == pair) &
+            (instruments["instrument_type"].isin(["CE", "PE"])) &
+            (instruments["expiry"] >= today)
+        ]
+
+        expiries = sorted(options["expiry"].unique())[:num_expiries]
+
+        # Get current price to find ATM
+        try:
+            nearest_fut = futures.iloc[0]
+            ltp = kite.ltp(f"{cfg['exchange']}:{nearest_fut['tradingsymbol']}")
+            current_price = list(ltp.values())[0]["last_price"]
+        except:
+            # Fallback ATM estimate
+            current_price = options["strike"].median()
+
+        interval = cfg["strike_interval"]
+        atm      = round(current_price / interval) * interval
+        n        = cfg["strikes_each_side"]
+
+        for expiry in expiries:
+            exp_opts = options[options["expiry"] == expiry]
+            target_strikes = [round(atm + i * interval, 4)
+                              for i in range(-n, n + 1)]
+
+            for strike in target_strikes:
+                for opt_type in ["CE", "PE"]:
+                    match = exp_opts[
+                        (abs(exp_opts["strike"] - strike) < 0.001) &
+                        (exp_opts["instrument_type"] == opt_type)
+                    ]
+                    if match.empty:
+                        continue
+                    row = match.iloc[0]
+                    active.append({
+                        "tradingsymbol":    row["tradingsymbol"],
+                        "instrument_token": int(row["instrument_token"]),
+                        "exchange":         cfg["exchange"],
+                        "expiry":           expiry.strftime("%Y-%m-%d"),
+                        "lot_size":         cfg["lot_size"],
+                        "instrument_type":  opt_type,
+                        "underlying":       pair,
+                        "strike":           strike,
+                    })
+
+    fut_count  = sum(1 for s in active if s["instrument_type"] == "FUT")
+    opts_count = sum(1 for s in active if s["instrument_type"] in ("CE","PE"))
+    print(f"Active currency: {fut_count} futures + {opts_count} options "
+          f"({pairs})")
+    return active
+
+
+if __name__ == "__main__":
+    from src.utils.auth import get_kite_client
+    kite = get_kite_client()
+
+    print("=== Currency Futures ===")
+    currency = get_active_currency(
+        kite,
+        pairs           = ["USDINR", "EURINR", "GBPINR"],
+        include_options = True,
+        num_expiries    = 1,
+    )
+    for s in currency:
+        print(f"  {s['tradingsymbol']:<25} type={s['instrument_type']:<4} "
+              f"token={s['instrument_token']}")
