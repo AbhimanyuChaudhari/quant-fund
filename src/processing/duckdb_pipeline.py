@@ -94,10 +94,6 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             ts_sec,
 
             -- Readable timestamp in IST
-            strftime(
-                (epoch_ms(ts_sec * 1000) AT TIME ZONE 'Asia/Kolkata'),
-                '%Y-%m-%d %H:%M:%S'
-            ) AS ts_ist,
 
             open, high, low, close,
             volume, tick_count, vwap, oi,
@@ -170,6 +166,11 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
         ORDER BY ts_sec
 
     """).df()
+    df["ts_ist"] = (
+        pd.to_datetime(df["ts_sec"], unit="s", utc=True)
+        .dt.tz_convert("Asia/Kolkata")
+        .dt.strftime("%Y-%m-%d %H:%M:%S")
+    )
 
     print(f"Built {len(df):,} bars | {len(df.columns)} columns | {symbol} | {date}")
     return df
