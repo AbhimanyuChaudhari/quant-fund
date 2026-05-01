@@ -22,6 +22,10 @@ ACTIVE_BROKER  = "zerodha"   # "zerodha" or "shoonya"
 FLUSH_INTERVAL = 60
 
 # Options config — which underlyings and how many expiries
+SPOT_SYMBOLS = {
+    256265: "NIFTY_SPOT",
+    260105: "BANKNIFTY_SPOT",
+}
 COLLECT_OPTIONS    = True
 OPTIONS_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
 OPTIONS_EXPIRIES    = 1        # nearest expiry only
@@ -241,7 +245,6 @@ def on_noreconnect(ws):
 def run_collector():
     global TOKENS, TOKEN_TO_SYMBOL
 
-    # Initialize broker
     if ACTIVE_BROKER == "zerodha":
         broker = ZerodhaBroker()
     else:
@@ -249,35 +252,36 @@ def run_collector():
 
     broker.login()
 
-    # ── Futures symbols (existing) ────────────────────
+    # ── Futures ───────────────────────────────────────
     futures_symbols = broker.get_active_symbols(tier="all")
     print(f"Futures:  {len(futures_symbols)} contracts")
 
-    # ── Options symbols (new) ─────────────────────────
+    # ── Options ───────────────────────────────────────
     options_symbols = []
     if COLLECT_OPTIONS:
-        kite = broker.kite  # reuse authenticated kite client
         options_symbols = get_active_options(
-            kite,
+            broker.kite,
             underlyings  = OPTIONS_UNDERLYINGS,
             num_expiries = OPTIONS_EXPIRIES,
         )
         print(f"Options:  {len(options_symbols)} contracts")
 
-    # ── Combine all symbols ───────────────────────────
+    # ── Combine futures + options first ───────────────
     all_symbols     = futures_symbols + options_symbols
     TOKEN_TO_SYMBOL = {s["instrument_token"]: s["tradingsymbol"]
                        for s in all_symbols}
-    TOKENS          = list(TOKEN_TO_SYMBOL.keys())
 
+    # ── Add spot indices AFTER ─────────────────────────
+    TOKEN_TO_SYMBOL.update(SPOT_SYMBOLS)
+    TOKENS = list(TOKEN_TO_SYMBOL.keys())
+
+    print(f"Spots:    {list(SPOT_SYMBOLS.values())}")
     print(f"Total:    {len(TOKENS)} instruments subscribed")
 
-    # Start flush thread
     threading.Thread(target=flush_loop, daemon=True).start()
     print(f"Flush interval: {FLUSH_INTERVAL}s")
     print(f"Broker: {ACTIVE_BROKER.upper()}\n")
 
-    # Start WebSocket
     broker.start_websocket(
         on_tick        = make_on_ticks(ACTIVE_BROKER),
         on_connect     = make_on_connect(broker, ACTIVE_BROKER),
