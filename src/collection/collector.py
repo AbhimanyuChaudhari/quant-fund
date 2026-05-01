@@ -10,16 +10,21 @@ from datetime import datetime
 from dotenv import load_dotenv
 from src.storage.gcs import upload_dataframe
 from src.collection.brokers import ZerodhaBroker, ShoonyaBroker
+from config.symbols import get_active_options
 
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
 # ─────────────────────────────────────
-# Config — change this one line to
-# switch brokers
+# Config
 # ─────────────────────────────────────
-ACTIVE_BROKER = "zerodha"  # "zerodha" or "shoonya"
+ACTIVE_BROKER  = "zerodha"   # "zerodha" or "shoonya"
 FLUSH_INTERVAL = 60
+
+# Options config — which underlyings and how many expiries
+COLLECT_OPTIONS    = True
+OPTIONS_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
+OPTIONS_EXPIRIES    = 1        # nearest expiry only
 
 # ─────────────────────────────────────
 # RAM buffer
@@ -88,11 +93,6 @@ def parse_zerodha_tick(tick: dict) -> dict:
 
 
 def parse_shoonya_tick(tick: dict) -> dict:
-    """
-    Shoonya tick format is different from Zerodha.
-    Fields: tk (token), lp (last price), bp1-bp10, sp1-sp10,
-            bq1-bq10, sq1-sq10, v (volume), oi, etc.
-    """
     def safe_float(val):
         try:
             return float(val)
@@ -105,20 +105,17 @@ def parse_shoonya_tick(tick: dict) -> dict:
         except (TypeError, ValueError):
             return 0
 
-    token     = tick.get("tk", "")
-    symbol    = TOKEN_TO_SYMBOL.get(token, "")
+    token      = tick.get("tk", "")
+    symbol     = TOKEN_TO_SYMBOL.get(token, "")
     last_price = safe_float(tick.get("lp", 0))
 
-    # Extract up to 10 levels each side
     bids = []
     asks = []
     for i in range(1, 11):
-        bid_p = safe_float(tick.get(f"bp{i}", 0))
-        bid_q = safe_int(tick.get(f"bq{i}", 0))
-        ask_p = safe_float(tick.get(f"sp{i}", 0))
-        ask_q = safe_int(tick.get(f"sq{i}", 0))
-        bids.append({"price": bid_p, "quantity": bid_q})
-        asks.append({"price": ask_p, "quantity": ask_q})
+        bids.append({"price": safe_float(tick.get(f"bp{i}", 0)),
+                     "quantity": safe_int(tick.get(f"bq{i}", 0))})
+        asks.append({"price": safe_float(tick.get(f"sp{i}", 0)),
+                     "quantity": safe_int(tick.get(f"sq{i}", 0))})
 
     best_bid      = bids[0]["price"]
     best_ask      = asks[0]["price"]
@@ -152,14 +149,11 @@ def parse_shoonya_tick(tick: dict) -> dict:
         "spread":           round(spread, 2),
         "book_imbalance":   round(imbalance, 6),
     }
-
-    # Add 10 levels for Shoonya (vs 5 for Zerodha)
     for i, (bid, ask) in enumerate(zip(bids, asks), 1):
         row[f"bid_p{i}"] = bid["price"]
         row[f"bid_q{i}"] = bid["quantity"]
         row[f"ask_p{i}"] = ask["price"]
         row[f"ask_q{i}"] = ask["quantity"]
-
     return row
 
 
@@ -217,7 +211,9 @@ def make_on_connect(broker, broker_name: str):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Connected.")
         broker.subscribe(TOKENS)
         symbols = [TOKEN_TO_SYMBOL.get(t, t) for t in TOKENS]
-        print(f"Subscribed to {symbols}")
+        print(f"Subscribed to {len(symbols)} instruments")
+        print(f"  Futures: {[s for s in symbols if 'FUT' in s]}")
+        print(f"  Options: {len([s for s in symbols if s.endswith(('CE','PE'))])} contracts")
     return on_connect
 
 
@@ -251,30 +247,44 @@ def run_collector():
     else:
         broker = ShoonyaBroker()
 
-    # Login
     broker.login()
 
-    # Get active symbols
-    symbols = broker.get_active_symbols(tier="all")
+    # ── Futures symbols (existing) ────────────────────
+    futures_symbols = broker.get_active_symbols(tier="all")
+    print(f"Futures:  {len(futures_symbols)} contracts")
+
+    # ── Options symbols (new) ─────────────────────────
+    options_symbols = []
+    if COLLECT_OPTIONS:
+        kite = broker.kite  # reuse authenticated kite client
+        options_symbols = get_active_options(
+            kite,
+            underlyings  = OPTIONS_UNDERLYINGS,
+            num_expiries = OPTIONS_EXPIRIES,
+        )
+        print(f"Options:  {len(options_symbols)} contracts")
+
+    # ── Combine all symbols ───────────────────────────
+    all_symbols     = futures_symbols + options_symbols
     TOKEN_TO_SYMBOL = {s["instrument_token"]: s["tradingsymbol"]
-                       for s in symbols}
+                       for s in all_symbols}
     TOKENS          = list(TOKEN_TO_SYMBOL.keys())
+
+    print(f"Total:    {len(TOKENS)} instruments subscribed")
 
     # Start flush thread
     threading.Thread(target=flush_loop, daemon=True).start()
-    print(f"Flush thread started. Interval: {FLUSH_INTERVAL}s")
-    print(f"Broker: {ACTIVE_BROKER.upper()}")
-    print(f"Collecting: {[s['tradingsymbol'] for s in symbols]}")
-    print("Press Ctrl+C to stop.\n")
+    print(f"Flush interval: {FLUSH_INTERVAL}s")
+    print(f"Broker: {ACTIVE_BROKER.upper()}\n")
 
     # Start WebSocket
     broker.start_websocket(
-        on_tick      = make_on_ticks(ACTIVE_BROKER),
-        on_connect   = make_on_connect(broker, ACTIVE_BROKER),
-        on_error     = on_error,
-        on_close     = on_close,
-        on_reconnect = on_reconnect,
-        on_noreconnect = on_noreconnect
+        on_tick        = make_on_ticks(ACTIVE_BROKER),
+        on_connect     = make_on_connect(broker, ACTIVE_BROKER),
+        on_error       = on_error,
+        on_close       = on_close,
+        on_reconnect   = on_reconnect,
+        on_noreconnect = on_noreconnect,
     )
 
 
