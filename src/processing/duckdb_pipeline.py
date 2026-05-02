@@ -10,8 +10,8 @@ from src.storage.gcs import get_bucket
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
-PROJECT_ID  = os.getenv("GCP_PROJECT_ID")
-BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+PROJECT_ID  = os.getenv("GCP_PROJECT_ID", "hedge-fund-494103")
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "hedge-fund-494103-marketdata")
 
 
 def get_duckdb_con():
@@ -24,9 +24,20 @@ def get_duckdb_con():
 
 def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
     """
-    Build 1-second bars + microstructure features in one DuckDB query.
-    Reads raw ticks directly from GCS — no download needed.
-    Clean output: no duplicate columns, no _x/_y suffixes, correct timestamps.
+    Build 1-second bars + microstructure features + L5 depth in one DuckDB query.
+    Reads raw ticks directly from GCS.
+
+    Output columns (40 total):
+        Base:         symbol, ts_sec, ts_ist
+        OHLCV:        open, high, low, close, volume, tick_count, vwap, oi
+        Spread:       spread_mean, spread_max, spread_bps
+        Imbalance:    imbalance_mean, imbalance_std, imbalance_last
+        Depth agg:    total_bid_qty, total_ask_qty, weighted_mid, price_impact
+        L5 depth:     bid_p1..5, bid_q1..5, ask_p1..5, ask_q1..5  (NEW)
+        Rolling:      realized_vol_10s/30s/60s/300s
+        Imb MA:       imbalance_ma_10s/30s/60s
+        Other:        spread_zscore, volume_ratio
+        Momentum:     price_mom_10s/30s/60s
     """
     con      = get_duckdb_con()
     gcs_path = f"gs://{BUCKET_NAME}/raw/orderbook/{symbol}/{date}/*.parquet"
@@ -40,7 +51,6 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
     df = con.execute(f"""
         WITH raw AS (
             SELECT
-                -- INTEGER division to avoid float precision loss
                 (ts_local_ns // 1000000000)::BIGINT AS ts_sec,
                 symbol,
                 last_price,
@@ -53,7 +63,15 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
                 total_bid_qty,
                 total_ask_qty,
                 bid_p1, bid_q1,
+                bid_p2, bid_q2,
+                bid_p3, bid_q3,
+                bid_p4, bid_q4,
+                bid_p5, bid_q5,
                 ask_p1, ask_q1,
+                ask_p2, ask_q2,
+                ask_p3, ask_q3,
+                ask_p4, ask_q4,
+                ask_p5, ask_q5,
                 (bid_p1 * ask_q1 + ask_p1 * bid_q1) /
                     NULLIF(bid_q1 + ask_q1, 0)        AS weighted_mid,
                 ABS(last_price - mid_price)            AS price_impact,
@@ -74,16 +92,35 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
                 COUNT(*)                 AS tick_count,
                 LAST(avg_price)          AS vwap,
                 LAST(oi)                 AS oi,
+
+                -- Spread
                 AVG(spread)              AS spread_mean,
                 MAX(spread)              AS spread_max,
                 AVG(spread_bps)          AS spread_bps,
+
+                -- Imbalance
                 AVG(book_imbalance)      AS imbalance_mean,
                 STDDEV(book_imbalance)   AS imbalance_std,
                 LAST(book_imbalance)     AS imbalance_last,
+
+                -- Depth aggregates
                 LAST(total_bid_qty)      AS total_bid_qty,
                 LAST(total_ask_qty)      AS total_ask_qty,
                 LAST(weighted_mid)       AS weighted_mid,
-                AVG(price_impact)        AS price_impact
+                AVG(price_impact)        AS price_impact,
+
+                -- L5 order book snapshot (last tick of each second)
+                LAST(bid_p1) AS bid_p1, LAST(bid_q1) AS bid_q1,
+                LAST(bid_p2) AS bid_p2, LAST(bid_q2) AS bid_q2,
+                LAST(bid_p3) AS bid_p3, LAST(bid_q3) AS bid_q3,
+                LAST(bid_p4) AS bid_p4, LAST(bid_q4) AS bid_q4,
+                LAST(bid_p5) AS bid_p5, LAST(bid_q5) AS bid_q5,
+                LAST(ask_p1) AS ask_p1, LAST(ask_q1) AS ask_q1,
+                LAST(ask_p2) AS ask_p2, LAST(ask_q2) AS ask_q2,
+                LAST(ask_p3) AS ask_p3, LAST(ask_q3) AS ask_q3,
+                LAST(ask_p4) AS ask_p4, LAST(ask_q4) AS ask_q4,
+                LAST(ask_p5) AS ask_p5, LAST(ask_q5) AS ask_q5
+
             FROM raw
             GROUP BY symbol, ts_sec
             ORDER BY ts_sec
@@ -92,9 +129,6 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
         SELECT
             symbol,
             ts_sec,
-
-            -- Readable timestamp in IST
-
             open, high, low, close,
             volume, tick_count, vwap, oi,
 
@@ -104,9 +138,15 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             -- Imbalance
             imbalance_mean, imbalance_std, imbalance_last,
 
-            -- Depth
+            -- Depth aggregates
             total_bid_qty, total_ask_qty,
             weighted_mid, price_impact,
+
+            -- L5 order book (NEW)
+            bid_p1, bid_q1, bid_p2, bid_q2, bid_p3, bid_q3,
+            bid_p4, bid_q4, bid_p5, bid_q5,
+            ask_p1, ask_q1, ask_p2, ask_q2, ask_p3, ask_q3,
+            ask_p4, ask_q4, ask_p5, ask_q5,
 
             -- Rolling volatility
             STDDEV(close) OVER (
@@ -154,18 +194,23 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
 
             -- Price momentum
             (close - LAG(close, 10) OVER (ORDER BY ts_sec)) /
-                NULLIF(LAG(close, 10) OVER (ORDER BY ts_sec), 0) AS price_mom_10s,
+                NULLIF(LAG(close, 10) OVER (ORDER BY ts_sec), 0)
+            AS price_mom_10s,
 
             (close - LAG(close, 30) OVER (ORDER BY ts_sec)) /
-                NULLIF(LAG(close, 30) OVER (ORDER BY ts_sec), 0) AS price_mom_30s,
+                NULLIF(LAG(close, 30) OVER (ORDER BY ts_sec), 0)
+            AS price_mom_30s,
 
             (close - LAG(close, 60) OVER (ORDER BY ts_sec)) /
-                NULLIF(LAG(close, 60) OVER (ORDER BY ts_sec), 0) AS price_mom_60s
+                NULLIF(LAG(close, 60) OVER (ORDER BY ts_sec), 0)
+            AS price_mom_60s
 
         FROM bars
         ORDER BY ts_sec
 
     """).df()
+
+    # Add readable IST timestamp
     df["ts_ist"] = (
         pd.to_datetime(df["ts_sec"], unit="s", utc=True)
         .dt.tz_convert("Asia/Kolkata")
@@ -189,11 +234,11 @@ def save_processed(df: pd.DataFrame, symbol: str, date: str):
     blob_name = f"processed/features/{symbol}/{date}.parquet"
     blob      = bucket.blob(blob_name)
     blob.upload_from_file(buf, content_type="application/octet-stream")
-    print(f"Saved → gs://{bucket.name}/{blob_name}")
+    print(f"Saved -> gs://{bucket.name}/{blob_name}")
 
 
 def run_pipeline(symbol: str, date: str):
-    """Full pipeline — raw ticks → features → GCS."""
+    """Full pipeline — raw ticks -> features -> GCS."""
     print(f"\n{'='*50}")
     print(f"Processing: {symbol} | {date}")
     print(f"{'='*50}")
@@ -209,13 +254,14 @@ def run_pipeline(symbol: str, date: str):
 if __name__ == "__main__":
     import time
 
-    for date in ["2026-04-29", "2026-04-30"]:
+    for date in ["2026-04-30"]:
         start   = time.time()
         df      = run_pipeline("NIFTY26MAYFUT", date)
         elapsed = time.time() - start
 
         if df is not None:
-            print(f"Completed in {elapsed:.1f}s")
-            print(df[["ts_ist", "open", "close", "spread_mean",
-                       "imbalance_last", "realized_vol_60s",
-                       "spread_zscore"]].head(5).to_string())
+            print(f"\nCompleted in {elapsed:.1f}s")
+            print(f"Columns ({len(df.columns)}): {df.columns.tolist()}")
+            print(df[["ts_ist", "open", "close",
+                       "bid_p1", "bid_q1", "ask_p1", "ask_q1",
+                       "bid_q2", "bid_q3"]].head(5).to_string())
