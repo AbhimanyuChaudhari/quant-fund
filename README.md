@@ -1,4 +1,4 @@
-# Quant Fund — Market Making Infrastructure
+# Quant Fund - Market Making Infrastructure
 
 Solo quant fund focused on Indian derivatives markets.
 Built in Python, running on GCP, collecting live tick data via Zerodha.
@@ -42,7 +42,7 @@ gcloud compute ssh data-collector --zone=asia-south1-c --project=hedge-fund-4941
 ### Instruments (261 total)
 ```
 Equity Futures:   89  (5 index + 84 stock futures, nearest expiry)
-NIFTY Options:    84  (ATM ± 10 strikes, 2 expiries — weekly + monthly)
+NIFTY Options:    84  (ATM ± 10 strikes, 2 expiries - weekly + monthly)
 BANKNIFTY Opts:   84  (ATM ± 10 strikes, 2 expiries)
 USDINR Futures:    2  (nearest 2 expiries, CDS segment)
 NIFTY Spot:        1  (NSE index quote, token 256265)
@@ -67,7 +67,7 @@ gs://hedge-fund-494103-marketdata/
         {YYYY-MM-DD}.parquet    ← Greeks + microstructure (options)
 ```
 
-### Processed Features (futures — 33 columns)
+### Processed Features (futures - 33 columns)
 ```
 Price:        open, high, low, close, vwap
 Volume:       volume, tick_count, oi
@@ -80,7 +80,7 @@ Momentum:     price_mom_10s, price_mom_30s, price_mom_60s
 Other:        price_impact, volume_ratio, spread_zscore, ts_ist
 ```
 
-### Processed Features (options — additional columns)
+### Processed Features (options - additional columns)
 ```
 Greeks:       iv, delta, gamma, vega, theta
 IV features:  iv_ma_60s, iv_zscore
@@ -217,14 +217,14 @@ USDINR Futures:   0.05 paise ← viable (zero STT)
 ## Strategies
 
 ### Built
-- **Avellaneda-Stoikov MM** (`mm_strategy.py`) — futures market making
+- **Avellaneda-Stoikov MM** (`mm_strategy.py`) - futures market making
   - Confirmed unviable on futures due to STT
   - Framework ready for options/currency
 
 ### Planned
-- **USDINR MM** — currency futures market making (zero STT)
-- **NIFTY 0DTE MM** — weekly expiry options on Tuesday
-- **Options MM** — monthly NIFTY/BANKNIFTY options
+- **USDINR MM** - currency futures market making (zero STT)
+- **NIFTY 0DTE MM** - weekly expiry options on Tuesday
+- **Options MM** - monthly NIFTY/BANKNIFTY options
 
 ### Research findings (Apr 30 NIFTY data)
 ```
