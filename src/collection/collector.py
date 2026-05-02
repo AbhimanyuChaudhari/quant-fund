@@ -23,7 +23,7 @@ FLUSH_INTERVAL      = 60
 
 COLLECT_OPTIONS     = True
 OPTIONS_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
-OPTIONS_EXPIRIES    = 1        # nearest expiry only
+OPTIONS_EXPIRIES    = 2        # nearest expiry only
 
 # Currency config
 COLLECT_CURRENCY  = True
