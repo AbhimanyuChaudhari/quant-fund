@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
 from kiteconnect import KiteConnect
@@ -9,14 +10,18 @@ load_dotenv(dotenv_path=ENV_PATH)
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 
+# VM config
+VM_NAME = "data-collector"
+VM_ZONE = "asia-south1-c"
+
 
 # ─────────────────────────────────────
 # Secret Manager helpers
 # ─────────────────────────────────────
 def get_secret(secret_id: str) -> str:
     """Fetch latest version of a secret from GCP Secret Manager."""
-    client = secretmanager.SecretManagerServiceClient()
-    name   = f"projects/{PROJECT_ID}/secrets/{secret_id}/versions/latest"
+    client   = secretmanager.SecretManagerServiceClient()
+    name     = f"projects/{PROJECT_ID}/secrets/{secret_id}/versions/latest"
     response = client.access_secret_version(request={"name": name})
     return response.payload.data.decode("utf-8").strip()
 
@@ -28,11 +33,52 @@ def store_secret(secret_id: str, value: str):
     payload = value.encode("utf-8")
     client.add_secret_version(
         request={
-            "parent": parent,
+            "parent":  parent,
             "payload": {"data": payload}
         }
     )
     print(f"Secret {secret_id} updated in Secret Manager.")
+
+
+# ─────────────────────────────────────
+# VM restart helper
+# ─────────────────────────────────────
+def restart_collector():
+    """
+    Restart the collector service on the VM via gcloud SSH.
+    Called automatically after token refresh.
+    """
+    print("\nRestarting collector on VM...")
+    try:
+        result = subprocess.run(
+            [
+                "gcloud", "compute", "ssh", VM_NAME,
+                f"--zone={VM_ZONE}",
+                f"--project={PROJECT_ID}",
+                "--command=sudo systemctl restart collector && "
+                "sudo systemctl status collector --no-pager | head -5"
+            ],
+            capture_output = True,
+            text           = True,
+            timeout        = 30,
+        )
+        if result.returncode == 0:
+            print("Collector restarted successfully.")
+            print(result.stdout)
+        else:
+            print(f"Auto-restart failed. Restart manually:")
+            print(f"  gcloud compute ssh {VM_NAME} --zone={VM_ZONE}")
+            print(f"  sudo systemctl restart collector")
+            if result.stderr:
+                print(f"  Error: {result.stderr}")
+    except subprocess.TimeoutExpired:
+        print("SSH timeout. Restart manually:")
+        print(f"  gcloud compute ssh {VM_NAME} --zone={VM_ZONE}")
+        print(f"  sudo systemctl restart collector")
+    except FileNotFoundError:
+        print("gcloud not found. Restart manually:")
+        print(f"  gcloud compute ssh {VM_NAME} --zone={VM_ZONE}")
+        print(f"  sudo systemctl restart collector")
 
 
 # ─────────────────────────────────────
@@ -49,7 +95,6 @@ def get_kite_client() -> KiteConnect:
         access_token = get_secret("KITE_ACCESS_TOKEN")
         print("Credentials loaded from Secret Manager.")
     except Exception:
-        # Fallback to .env for local dev
         api_key      = os.getenv("KITE_API_KEY")
         access_token = os.getenv("KITE_ACCESS_TOKEN")
         print("Credentials loaded from .env")
@@ -57,7 +102,7 @@ def get_kite_client() -> KiteConnect:
     if not api_key:
         raise ValueError("KITE_API_KEY not found.")
     if not access_token:
-        raise ValueError("KITE_ACCESS_TOKEN not found — run generate_token first.")
+        raise ValueError("KITE_ACCESS_TOKEN not found — run auth.py first.")
 
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
@@ -69,8 +114,11 @@ def get_kite_client() -> KiteConnect:
 # ─────────────────────────────────────
 def generate_token():
     """
-    Run this manually each morning to get a fresh access token.
-    Saves token to both .env and Secret Manager.
+    Run this every night before market opens.
+    Saves token to Secret Manager AND restarts collector on VM.
+    
+    Complete daily routine in ONE command:
+        python src/utils/auth.py
     """
     try:
         api_key    = get_secret("KITE_API_KEY")
@@ -84,22 +132,24 @@ def generate_token():
 
     kite = KiteConnect(api_key=api_key)
 
-    print("\n" + "="*50)
-    print("Open this URL in your browser and login:")
-    print("="*50)
+    print("\n" + "="*55)
+    print("DAILY TOKEN REFRESH")
+    print("="*55)
+    print("\nStep 1: Open this URL in browser and login:")
     print(kite.login_url())
-    print("="*50)
-    print("\nAfter login copy the request_token from the URL.")
+    print("\nAfter login, copy the request_token from the URL.")
     print("URL looks like: https://127.0.0.1/?request_token=XXXXX\n")
 
     request_token = input("Paste request_token here: ").strip()
-    data          = kite.generate_session(request_token, api_secret=api_secret)
+    data          = kite.generate_session(request_token,
+                                          api_secret=api_secret)
     access_token  = data["access_token"]
 
-    # Save to Secret Manager
+    # Step 2: Save to Secret Manager
+    print("\nStep 2: Saving token to Secret Manager...")
     store_secret("KITE_ACCESS_TOKEN", access_token)
 
-    # Also save to .env as backup
+    # Step 3: Save to .env as backup
     lines = []
     if ENV_PATH.exists():
         with open(ENV_PATH, "r") as f:
@@ -116,9 +166,16 @@ def generate_token():
         if not found:
             f.write(f"KITE_ACCESS_TOKEN={access_token}\n")
 
-    print("\n" + "="*50)
     print("Token saved to Secret Manager and .env")
-    print("="*50 + "\n")
+
+    # Step 4: Restart collector on VM automatically
+    print("\nStep 3: Restarting collector on VM...")
+    restart_collector()
+
+    print("\n" + "="*55)
+    print("DONE — Token refreshed, collector restarted")
+    print("Market opens at 9:15am IST (3:45am EST)")
+    print("="*55 + "\n")
 
     return access_token
 
