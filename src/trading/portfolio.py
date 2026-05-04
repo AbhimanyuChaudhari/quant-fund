@@ -233,23 +233,26 @@ class Portfolio:
             logger.error(f"Failed to save portfolio state: {e}")
 
     def _load_state(self):
-        """Load portfolio state from disk (crash recovery)."""
         if not STATE_PATH.exists():
             return
         try:
             state = json.loads(STATE_PATH.read_text())
             saved_date = state.get("date", "")
-
-            # Only restore if same trading day
             if saved_date == str(date.today()):
                 self.realized_pnl = state.get("realized_pnl", 0.0)
                 for sym, pos_data in state.get("positions", {}).items():
-                    self.positions[sym] = Position(**pos_data)
+                    pos = Position(**pos_data)
+                    if pos.lots != 0:   # ← only restore open positions
+                        self.positions[sym] = pos
                 logger.info(
                     f"Portfolio state restored | "
                     f"PnL: Rs.{self.realized_pnl:+,.0f} | "
-                    f"Positions: {len(self.positions)}"
+                    f"Open positions: {len(self.positions)}"
                 )
+            else:
+                # Different day — start fresh, delete stale state
+                STATE_PATH.unlink(missing_ok=True)
+                logger.info("New trading day — portfolio state reset")
         except Exception as e:
             logger.error(f"Failed to load portfolio state: {e}")
 

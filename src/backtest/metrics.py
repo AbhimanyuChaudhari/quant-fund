@@ -127,6 +127,7 @@ def compute_metrics(fills: List[Fill],
             inv -= fill.quantity
         max_inv = max(max_inv, abs(inv))
     m.max_inventory = max_inv
+    m.final_inventory = inv
 
     return m
 

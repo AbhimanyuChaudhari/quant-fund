@@ -45,10 +45,10 @@ class BacktestEngine:
         metrics  = engine.run()
     """
 
-    def __init__(self, config: BacktestConfig, strategy: BaseStrategy):
+    def __init__(self, config: BacktestConfig, strategy: BaseStrategy, order_book=None):
         self.config   = config
         self.strategy = strategy
-        self.book     = SimulatedOrderBook(max_inventory=config.max_inventory)
+        self.book = order_book or SimulatedOrderBook(max_inventory=config.max_inventory)
         self.tc       = TransactionCosts(lot_size=config.lot_size)
 
         self._all_fills:   list[Fill] = []
