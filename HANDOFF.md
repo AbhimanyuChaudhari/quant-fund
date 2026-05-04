@@ -1,4 +1,4 @@
-# Quant Fund — Complete Handoff Document
+# Quant Fund - Complete Handoff Document
 **Last updated:** May 2, 2026  
 **Author:** Abhimanyu Chaudhari  
 **Location:** Newark, NJ  
@@ -15,11 +15,11 @@ Primary targets: USDINR Futures (zero STT) and NIFTY 0DTE Options (low STT).
 
 ## Current Status
 ```
-Infrastructure:    COMPLETE — collecting 261 instruments live
-Backtesting:       COMPLETE — with realistic fill simulation
-Live trading:      COMPLETE — paper-live mode ready for Monday
-USDINR strategy:   PENDING — need Monday's data to backtest
-0DTE strategy:     PENDING — need Tuesday May 5 data
+Infrastructure:    COMPLETE - collecting 261 instruments live
+Backtesting:       COMPLETE - with realistic fill simulation
+Live trading:      COMPLETE - paper-live mode ready for Monday
+USDINR strategy:   PENDING - need Monday's data to backtest
+0DTE strategy:     PENDING - need Tuesday May 5 data
 ```
 
 ---
