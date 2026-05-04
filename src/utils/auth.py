@@ -52,7 +52,8 @@ def restart_collector():
     try:
         result = subprocess.run(
             [
-                "gcloud", "compute", "ssh", VM_NAME,
+                r"C:\Users\abhim\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd",
+                    "compute", "ssh", VM_NAME,
                 f"--zone={VM_ZONE}",
                 f"--project={PROJECT_ID}",
                 "--command=sudo systemctl restart collector && "
@@ -61,6 +62,8 @@ def restart_collector():
             capture_output = True,
             text           = True,
             timeout        = 30,
+            encoding       = 'utf-8',
+            errors         = 'replace',
         )
         if result.returncode == 0:
             print("Collector restarted successfully.")
