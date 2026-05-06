@@ -65,7 +65,7 @@ def get_unprocessed_options_jobs() -> list[tuple]:
                 # Extract underlying from symbol
                 if symbol.startswith("BANKNIFTY"):
                     underlying = "BANKNIFTY"
-                elif symbol.startswith("NIFTY"):
+                elif symbol.startswith("NIFTY") and not symbol.startswith("NIFTYNXT"):
                     underlying = "NIFTY"
                 else:
                     continue
