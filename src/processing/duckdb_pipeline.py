@@ -131,7 +131,7 @@ def build_features_duckdb(symbol: str, date: str) -> pd.DataFrame:
             symbol,
             ts_sec,
             open, high, low, close,
-            volume, tick_count, vwap, oi,
+            volume_delta, volume_cumulative, tick_count, vwap, oi,
 
             -- Spread
             spread_mean, spread_max, spread_bps,
