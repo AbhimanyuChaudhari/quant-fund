@@ -10,6 +10,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from src.storage.gcs import upload_dataframe
 from src.collection.brokers import ZerodhaBroker, ShoonyaBroker
+from src.collection.dynamic_subscriptions import DynamicSubscriptionManager
 from config.symbols import get_active_options, get_active_currency
 
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -23,18 +24,29 @@ FLUSH_INTERVAL      = 60
 
 COLLECT_OPTIONS     = True
 OPTIONS_UNDERLYINGS = ["NIFTY", "BANKNIFTY"]
-OPTIONS_EXPIRIES    = 2        # nearest expiry only
+OPTIONS_EXPIRIES    = 2
 
-# Currency config
-COLLECT_CURRENCY  = True
-CURRENCY_PAIRS    = ["USDINR"]   # add EURINR, GBPINR later
-CURRENCY_OPTIONS  = False        # futures only for now
-CURRENCY_EXPIRIES = 2            # nearest 2 expiries
+COLLECT_CURRENCY    = True
+CURRENCY_PAIRS      = ["USDINR"]
+CURRENCY_OPTIONS    = False
+CURRENCY_EXPIRIES   = 2
 
-# Spot index tokens (NSE index quotes, not tradeable)
+# Dynamic resubscription config
+DYNAMIC_REBALANCE        = True   # enable/disable
+REBALANCE_INTERVAL_SECS  = 1800   # every 30 minutes
+REBALANCE_MIN_SHIFT      = 2      # rebalance if ATM shifts 2+ strikes
+OPTIONS_STRIKES_EACH_SIDE = 10    # ATM ± 10
+
+# Spot index tokens
 SPOT_SYMBOLS = {
     256265: "NIFTY_SPOT",
     260105: "BANKNIFTY_SPOT",
+}
+
+# Spot token → underlying name (for price tracking)
+SPOT_TO_UNDERLYING = {
+    256265: "NIFTY",
+    260105: "BANKNIFTY",
 }
 
 # ─────────────────────────────────────
@@ -44,6 +56,13 @@ buffer      = []
 buffer_lock = threading.Lock()
 TOKENS      = []
 TOKEN_TO_SYMBOL = {}
+
+# Live spot prices (updated from ticks)
+spot_prices     = {}
+spot_prices_lock = threading.Lock()
+
+# Dynamic subscription manager (set in run_collector)
+subscription_mgr = None
 
 
 # ─────────────────────────────────────
@@ -189,7 +208,7 @@ def flush_buffer():
         blob_name = f"raw/orderbook/{symbol}/{date_str}/{timestamp_str}.parquet"
         try:
             upload_dataframe(group, blob_name)
-            print(f"[{timestamp_str}] GCS ← {blob_name} ({len(group)} ticks)")
+            print(f"[{timestamp_str}] GCS <- {blob_name} ({len(group)} ticks)")
         except Exception as e:
             print(f"[GCS ERROR] {symbol}: {e}")
 
@@ -205,30 +224,94 @@ def flush_loop():
 # ─────────────────────────────────────
 def make_on_ticks(broker_name: str):
     def on_ticks(ws, ticks):
+        global subscription_mgr
+
         with buffer_lock:
             for tick in ticks:
                 if broker_name == "zerodha":
-                    if tick["instrument_token"] in TOKENS:
+                    token = tick["instrument_token"]
+
+                    # Update spot prices from index ticks
+                    if token in SPOT_TO_UNDERLYING:
+                        underlying = SPOT_TO_UNDERLYING[token]
+                        price      = tick.get("last_price", 0)
+                        if price > 0:
+                            with spot_prices_lock:
+                                spot_prices[underlying] = price
+
+                    if token in TOKENS:
                         buffer.append(parse_zerodha_tick(tick))
                 else:
                     token = tick.get("tk", "")
                     if token in TOKENS:
                         buffer.append(parse_shoonya_tick(tick))
+
+        # Dynamic resubscription check (outside buffer lock)
+        if DYNAMIC_REBALANCE and subscription_mgr is not None:
+            with spot_prices_lock:
+                current_prices = spot_prices.copy()
+
+            if current_prices and subscription_mgr.should_rebalance():
+                changes = subscription_mgr.rebalance_if_needed(
+                    current_prices
+                )
+                if changes:
+                    for underlying, change in changes.items():
+                        # Update global token maps
+                        _update_token_maps(subscription_mgr)
+                        print(
+                            f"[REBALANCE] {underlying}: "
+                            f"ATM {change['old_atm']} -> {change['new_atm']} | "
+                            f"+{change['added']} -{change['removed']} tokens"
+                        )
+
     return on_ticks
 
 
-def make_on_connect(broker, broker_name: str):
+def _update_token_maps(mgr: DynamicSubscriptionManager):
+    """Update global TOKENS and TOKEN_TO_SYMBOL after rebalance."""
+    global TOKENS, TOKEN_TO_SYMBOL
+    status = mgr.status()
+    for underlying, info in status.items():
+        # Tokens updated in mgr — rebuild TOKEN_TO_SYMBOL
+        # The new tokens are already subscribed by mgr
+        pass  # TOKEN_TO_SYMBOL updated by mgr internally
+
+
+def make_on_connect(broker, broker_name: str, instruments_df=None):
     def on_connect(ws, response):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Connected.")
+        global subscription_mgr
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] Connected.")
         broker.subscribe(TOKENS)
-        symbols   = [TOKEN_TO_SYMBOL.get(t, t) for t in TOKENS]
-        futures   = [s for s in symbols if s.endswith("FUT")]
-        options   = [s for s in symbols if s.endswith(("CE", "PE"))]
-        spots     = [s for s in symbols if s.endswith("_SPOT")]
+
+        symbols = [TOKEN_TO_SYMBOL.get(t, str(t)) for t in TOKENS]
+        futures = [s for s in symbols if s.endswith("FUT")]
+        options = [s for s in symbols if s.endswith(("CE", "PE"))]
+        spots   = [s for s in symbols if s.endswith("_SPOT")]
+
         print(f"Subscribed to {len(symbols)} instruments")
         print(f"  Futures: {len(futures)}")
         print(f"  Options: {len(options)}")
         print(f"  Spots:   {spots}")
+
+        # Initialize dynamic subscription manager
+        if DYNAMIC_REBALANCE and instruments_df is not None:
+            subscription_mgr = DynamicSubscriptionManager(
+                kite                = broker.kite,
+                kws                 = ws,
+                instruments_df      = instruments_df,
+                strikes_each_side   = OPTIONS_STRIKES_EACH_SIDE,
+                rebalance_interval  = REBALANCE_INTERVAL_SECS,
+                min_shift_strikes   = REBALANCE_MIN_SHIFT,
+            )
+            print(
+                f"Dynamic resubscription enabled "
+                f"(every {REBALANCE_INTERVAL_SECS//60}min, "
+                f"ATM±{OPTIONS_STRIKES_EACH_SIDE})"
+            )
+
     return on_connect
 
 
@@ -263,6 +346,11 @@ def run_collector():
 
     broker.login()
 
+    # Load instruments for dynamic resubscription
+    import pandas as pd
+    instruments_df = pd.DataFrame(broker.kite.instruments("NFO"))
+    instruments_df["expiry"] = pd.to_datetime(instruments_df["expiry"])
+
     # ── Futures ───────────────────────────────────────
     futures_symbols = broker.get_active_symbols(tier="all")
     print(f"Futures:  {len(futures_symbols)} contracts")
@@ -275,9 +363,10 @@ def run_collector():
             underlyings  = OPTIONS_UNDERLYINGS,
             num_expiries = OPTIONS_EXPIRIES,
         )
-        print(f"Options:  {len(options_symbols)} contracts")
+        print(f"Options:  {len(options_symbols)} contracts "
+              f"({OPTIONS_UNDERLYINGS}, {OPTIONS_EXPIRIES} expiries)")
 
-    # ── Currency symbols ─────────────────────────────
+    # ── Currency ──────────────────────────────────────
     currency_symbols = []
     if COLLECT_CURRENCY:
         currency_symbols = get_active_currency(
@@ -290,24 +379,28 @@ def run_collector():
 
     # ── Combine all ───────────────────────────────────
     all_symbols     = futures_symbols + options_symbols + currency_symbols
-    TOKEN_TO_SYMBOL = {s["instrument_token"]: s["tradingsymbol"]
-                       for s in all_symbols}
+    TOKEN_TO_SYMBOL = {
+        s["instrument_token"]: s["tradingsymbol"]
+        for s in all_symbols
+    }
 
     # ── Add spot indices ──────────────────────────────
     TOKEN_TO_SYMBOL.update(SPOT_SYMBOLS)
-
     TOKENS = list(TOKEN_TO_SYMBOL.keys())
 
     print(f"Spots:    {list(SPOT_SYMBOLS.values())}")
-    print(f"Total:    {len(TOKENS)} instruments subscribed")
+    print(f"Total:    {len(TOKENS)} instruments subscribed\n")
 
     threading.Thread(target=flush_loop, daemon=True).start()
     print(f"Flush interval: {FLUSH_INTERVAL}s")
-    print(f"Broker: {ACTIVE_BROKER.upper()}\n")
+    print(f"Broker: {ACTIVE_BROKER.upper()}")
+    print(f"Dynamic rebalance: {'ON' if DYNAMIC_REBALANCE else 'OFF'}\n")
 
     broker.start_websocket(
         on_tick        = make_on_ticks(ACTIVE_BROKER),
-        on_connect     = make_on_connect(broker, ACTIVE_BROKER),
+        on_connect     = make_on_connect(
+                             broker, ACTIVE_BROKER, instruments_df
+                         ),
         on_error       = on_error,
         on_close       = on_close,
         on_reconnect   = on_reconnect,

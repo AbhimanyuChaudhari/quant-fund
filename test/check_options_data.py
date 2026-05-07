@@ -1,56 +1,49 @@
-import duckdb
 import gcsfs
-import datetime
+from datetime import date
 
 PROJECT_ID  = "hedge-fund-494103"
 BUCKET_NAME = "hedge-fund-494103-marketdata"
 
-fs  = gcsfs.GCSFileSystem(project=PROJECT_ID)
-con = duckdb.connect()
-con.register_filesystem(fs)
+fs    = gcsfs.GCSFileSystem(project=PROJECT_ID)
+today = date.today().strftime("%Y-%m-%d")
 
-# First find ALL options folders that have data today
-all_folders = fs.ls(f"{BUCKET_NAME}/raw/orderbook/")
-options_folders = [f.split('/')[-1] for f in all_folders 
-                   if f.split('/')[-1].endswith(('CE', 'PE'))]
+print(f"=== Checking options data for {today} ===\n")
 
-print(f"Total options symbols in GCS: {len(options_folders)}")
-print(f"\nChecking data for today (2026-05-01)...\n")
+# Check NIFTY options
+nifty_files = fs.glob(
+    f"{BUCKET_NAME}/raw/orderbook/NIFTY265*/{today}/*.parquet"
+)
+bnifty_files = fs.glob(
+    f"{BUCKET_NAME}/raw/orderbook/BANKNIFTY265*/{today}/*.parquet"
+)
 
-print(f"{'Symbol':<32} {'Files':>6} {'Ticks':>8} {'First':>12} {'Last':>12}")
-print("-" * 78)
+print(f"NIFTY options files:     {len(nifty_files)}")
+print(f"BANKNIFTY options files: {len(bnifty_files)}")
 
-for sym in sorted(options_folders):
-    files = fs.glob(f"{BUCKET_NAME}/raw/orderbook/{sym}/2026-05-01/*.parquet")
-    if not files:
-        continue
+if nifty_files:
+    # Show which symbols have data
+    symbols = set(f.split("/")[3] for f in nifty_files)
+    print(f"\nNIFTY symbols with data ({len(symbols)}):")
+    for s in sorted(symbols)[:10]:
+        count = sum(1 for f in nifty_files if f"/raw/orderbook/{s}/" in f)
+        print(f"  {s}: {count} files")
+    if len(symbols) > 10:
+        print(f"  ... and {len(symbols)-10} more")
+else:
+    print("\nNo NIFTY options data yet")
+    print("Possible reasons:")
+    print("  1. Collector just restarted — wait 60s for first flush")
+    print("  2. Token issue — check collector logs")
+    print("  3. Options not subscribed — check collector config")
 
-    # Read all files by loading each individually and summing
-    total_ticks = 0
-    first_ts    = None
-    last_ts     = None
+# Check USDINR
+usdinr_files = fs.glob(
+    f"{BUCKET_NAME}/raw/orderbook/USDINR*/{today}/*.parquet"
+)
+print(f"\nUSDINR files: {len(usdinr_files)}")
 
-    for f in files:
-        try:
-            row = con.execute(f"""
-                SELECT COUNT(*), MIN(ts_local_ns), MAX(ts_local_ns)
-                FROM read_parquet('gs://{f}')
-            """).fetchone()
-            total_ticks += row[0]
-            if row[1]:
-                first_ts = min(first_ts, row[1]) if first_ts else row[1]
-                last_ts  = max(last_ts,  row[2]) if last_ts  else row[2]
-        except:
-            continue
-
-    if total_ticks == 0:
-        continue
-
-    def to_ist(ns):
-        sec = ns // 1_000_000_000
-        return datetime.datetime.utcfromtimestamp(sec + 19800).strftime('%H:%M:%S')
-
-    first_str = to_ist(first_ts) if first_ts else "?"
-    last_str  = to_ist(last_ts)  if last_ts  else "?"
-
-    print(f"{sym:<32} {len(files):>6} {total_ticks:>8,} {first_str:>12} {last_str:>12}")
+# Check futures for comparison
+nifty_fut = fs.glob(
+    f"{BUCKET_NAME}/raw/orderbook/NIFTY26MAYFUT/{today}/*.parquet"
+)
+print(f"NIFTY futures files: {len(nifty_fut)}  ← if this is 0, collector is down")
