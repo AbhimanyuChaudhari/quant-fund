@@ -27,17 +27,32 @@ def get_secret(secret_id: str) -> str:
 
 
 def store_secret(secret_id: str, value: str):
-    """Store a new version of a secret in GCP Secret Manager."""
-    client  = secretmanager.SecretManagerServiceClient()
-    parent  = f"projects/{PROJECT_ID}/secrets/{secret_id}"
-    payload = value.encode("utf-8")
+    """Store a new version of a secret. Creates secret if it doesn't exist."""
+    client = secretmanager.SecretManagerServiceClient()
+    parent = f"projects/{PROJECT_ID}"
+    name   = f"{parent}/secrets/{secret_id}"
+
+    # Create secret if it doesn't exist
+    try:
+        client.get_secret(request={"name": name})
+    except Exception:
+        client.create_secret(request={
+            "parent":    parent,
+            "secret_id": secret_id,
+            "secret": {
+                "replication": {"automatic": {}}
+            }
+        })
+        print(f"Created secret {secret_id}")
+
+    # Add new version
     client.add_secret_version(
         request={
-            "parent":  parent,
-            "payload": {"data": payload}
+            "parent":  name,
+            "payload": {"data": value.encode("utf-8")}
         }
     )
-    print(f"Secret {secret_id} updated in Secret Manager.")
+    print(f"Secret {secret_id} updated.")
 
 
 # ─────────────────────────────────────

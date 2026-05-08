@@ -317,6 +317,18 @@ def make_on_connect(broker, broker_name: str, instruments_df=None):
 
 def on_error(ws, code, reason):
     print(f"[ERROR] {code}: {reason}")
+    if "403" in str(reason) or "Forbidden" in str(reason):
+        print("[TOKEN] 403 detected — running auto token refresh...")
+        try:
+            import subprocess
+            import sys
+            subprocess.Popen([
+                sys.executable,
+                "src/utils/auto_token.py"
+            ])
+            print("[TOKEN] Auto refresh triggered — collector will reconnect")
+        except Exception as e:
+            print(f"[TOKEN] Auto refresh failed: {e}")
 
 
 def on_close(ws, code, reason):
