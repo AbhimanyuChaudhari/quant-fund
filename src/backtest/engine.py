@@ -71,7 +71,8 @@ class BacktestEngine:
                              self.config.market_hours):
 
             # ── Day boundary handling ──────────────────
-            bar_date = str(bar["ts_ist"])[:10]  # 'YYYY-MM-DD'
+            bar_date = str(bar.get("ts_ist", "")) [:10] if "ts_ist" in bar.index \
+                else str(bar.get("ts_sec", ""))[:10] if "ts_sec" in bar.index else ""  # 'YYYY-MM-DD'
             if bar_date != self._current_day:
                 if self._current_day:
                     # End of previous day

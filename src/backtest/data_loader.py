@@ -31,11 +31,23 @@ def _get_con() -> duckdb.DuckDBPyConnection:
     return con
 
 
-def _market_filter() -> str:
-    """SQL fragment: filter to NSE market hours 09:15-15:30 IST."""
+def _market_filter(symbol: str = "") -> str:
+    """SQL fragment: filter to market hours IST.
+    NSE equity: 09:15-15:30 IST
+    CDS currency: 09:00-17:00 IST
+    """
+    is_currency = any(x in symbol.upper() 
+                      for x in ["USDINR", "EURINR", "GBPINR", "JPYINR"])
+    if is_currency:
+        open_ist  = 9 * 3600           # 09:00 IST = 32400
+        close_ist = 17 * 3600          # 17:00 IST = 61200
+    else:
+        open_ist  = MARKET_OPEN_IST    # 09:15 IST = 33300
+        close_ist = MARKET_CLOSE_IST   # 15:30 IST = 55800
+
     return f"""
-        ((ts_sec + 19800) % 86400) >= {MARKET_OPEN_IST}
-        AND ((ts_sec + 19800) % 86400) <= {MARKET_CLOSE_IST}
+        ((ts_sec + 19800) % 86400) >= {open_ist}
+        AND ((ts_sec + 19800) % 86400) <= {close_ist}
     """
 
 
@@ -61,7 +73,7 @@ def load_day(symbol: str, date: str,
         print(f"[data_loader] No file: {symbol} | {date}")
         return pd.DataFrame()
 
-    where = f"WHERE {_market_filter()}" if market_hours_only else ""
+    where = f"WHERE {_market_filter(symbol)}" if market_hours_only else ""
 
     df = con.execute(f"""
         SELECT *
