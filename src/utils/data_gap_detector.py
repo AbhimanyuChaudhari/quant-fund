@@ -40,13 +40,17 @@ EXPECTED_BNF_OPT    = 84
 EXPECTED_USDINR     = 2
 EXPECTED_SPOTS      = 2
 
-# Market hours (IST) — equity session
-EQUITY_OPEN   = time(9, 15)
-EQUITY_CLOSE  = time(15, 30)
+# Market hours in UTC (ts_ist column is misnamed — actually stored as UTC)
+# IST 9:15  = UTC 3:45
+# IST 15:30 = UTC 10:00
+EQUITY_OPEN   = time(3, 45)
+EQUITY_CLOSE  = time(10, 0)
 
-# CDS hours (IST) — currency session
-CDS_OPEN      = time(9, 0)
-CDS_CLOSE     = time(17, 0)
+# CDS hours in UTC
+# IST 9:00  = UTC 3:30
+# IST 17:00 = UTC 11:30
+CDS_OPEN      = time(3, 30)
+CDS_CLOSE     = time(11, 30)
 
 # Gap thresholds
 MIN_COVERAGE_PCT    = 0.50   # instrument has < 50% expected ticks = bad
@@ -77,10 +81,10 @@ def is_usdinr(symbol: str) -> bool:
 def expected_minutes(symbol: str) -> int:
     """Expected number of 1-minute bars for a given symbol."""
     if is_usdinr(symbol):
-        # CDS: 9:00 to 17:00 = 480 mins
+        # CDS: 3:30 to 11:30 UTC = 480 mins
         return 480
     else:
-        # Equity: 9:15 to 15:30 = 375 mins
+        # Equity: 3:45 to 10:00 UTC = 375 mins
         return 375
 
 
