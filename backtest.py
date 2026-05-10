@@ -11,6 +11,14 @@ Usage:
     # Custom parameters
     python backtest.py --symbol NIFTY26MAYFUT --start 2026-04-30 --end 2026-04-30 \
         --realistic --gamma 0.1 --max-inventory 5 --queue-aggression 0.3
+
+    # With Kyle's Lambda adverse selection filter
+    python backtest.py --symbol NIFTY26MAYFUT --start 2026-04-30 --end 2026-04-30 \
+        --realistic --use-kyle
+
+    # A/B comparison (run both, compare net PnL)
+    python backtest.py --symbol NIFTY26MAYFUT --start 2026-04-30 --end 2026-04-30 --realistic
+    python backtest.py --symbol NIFTY26MAYFUT --start 2026-04-30 --end 2026-04-30 --realistic --use-kyle
 """
 
 import argparse
@@ -41,6 +49,12 @@ def parse_args():
     parser.add_argument("--min-spread",    type=float, default=0.5)
     parser.add_argument("--max-spread",    type=float, default=10.0)
 
+    # Kyle's Lambda                                            # ← NEW
+    parser.add_argument("--use-kyle",      action="store_true",
+                        help="Enable Kyle's Lambda adverse selection filter")
+    parser.add_argument("--kyle-window",   type=int, default=30,
+                        help="Kyle's Lambda rolling window in bars (default 30)")
+
     # Risk params
     parser.add_argument("--max-inventory", type=int,   default=5)
     parser.add_argument("--lot-size",      type=int,   default=75)
@@ -57,11 +71,13 @@ def main():
         max_inventory = args.max_inventory,
     )
     strategy = AvellanedaStoikovStrategy(
-        config     = strat_config,
-        gamma      = args.gamma,
-        kappa      = args.kappa,
-        min_spread = args.min_spread,
-        max_spread = args.max_spread,
+        config      = strat_config,
+        gamma       = args.gamma,
+        kappa       = args.kappa,
+        min_spread  = args.min_spread,
+        max_spread  = args.max_spread,
+        use_kyle    = args.use_kyle,        # ← NEW
+        kyle_window = args.kyle_window,     # ← NEW
     )
 
     bt_config = BacktestConfig(
@@ -78,6 +94,8 @@ def main():
         from src.backtest.order_book import SimulatedOrderBook
         print(f"\nUsing REALISTIC fill simulation "
               f"(queue_aggression={args.queue_aggression})")
+        print(f"Kyle's Lambda: {'ON' if args.use_kyle else 'OFF'}"  # ← NEW
+              f"{f'  (window={args.kyle_window})' if args.use_kyle else ''}")
         order_book = RealisticOrderBook(
             max_inventory    = args.max_inventory,
             queue_aggression = args.queue_aggression,
@@ -85,6 +103,7 @@ def main():
     else:
         from src.backtest.order_book import SimulatedOrderBook
         print("\nUsing SIMPLE fill simulation (fills on price crossing)")
+        print(f"Kyle's Lambda: {'ON' if args.use_kyle else 'OFF'}")  # ← NEW
         order_book = None  # engine uses default
 
     engine  = BacktestEngine(bt_config, strategy,

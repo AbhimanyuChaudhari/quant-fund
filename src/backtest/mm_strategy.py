@@ -11,6 +11,9 @@ Key formulas (price point version):
     Optimal spread:
         spread = gamma * sigma^2 * T + (2/gamma) * ln(1 + gamma/kappa)
 
+    Kyle's Lambda adjustment (adverse selection):
+        adjusted_spread = spread * kyle_model.spread_multiplier()
+
 Where:
     sigma = realized_vol_60s in price points (e.g. 2.5 pts)
     T     = fraction of session remaining (0.0 → 1.0)
@@ -31,6 +34,7 @@ from typing import Optional
 from src.backtest import engine
 from src.backtest.strategy import BaseStrategy, StrategyConfig
 from src.backtest.order_book import SimulatedOrderBook, Side, Fill
+from src.models.kyle_lambda import KyleLambdaModel, Bar as KyleBar   # ← NEW
 
 
 class AvellanedaStoikovStrategy(BaseStrategy):
@@ -42,7 +46,9 @@ class AvellanedaStoikovStrategy(BaseStrategy):
                  gamma: float      = 0.1,
                  kappa: float      = 1.5,
                  min_spread: float = 0.5,
-                 max_spread: float = 10.0):
+                 max_spread: float = 10.0,
+                 use_kyle: bool    = False,       # ← NEW: toggle on/off
+                 kyle_window: int  = 30):        # ← NEW: rolling window
         super().__init__(config)
         self.gamma      = gamma
         self.kappa      = kappa
@@ -52,6 +58,10 @@ class AvellanedaStoikovStrategy(BaseStrategy):
         self.bid_id: Optional[int] = None
         self.ask_id: Optional[int] = None
         self.default_vol = 2.0    # NIFTY typical 60s vol in price points
+
+        # ── Kyle's Lambda (adverse selection filter) ──    # ← NEW
+        self.use_kyle   = use_kyle
+        self.kyle_model = KyleLambdaModel(window=kyle_window) if use_kyle else None
 
     # ─────────────────────────────────────
     # Core formulas (price point space)
@@ -86,6 +96,31 @@ class AvellanedaStoikovStrategy(BaseStrategy):
         spread = term1 + term2
         return max(self.min_spread, min(spread, self.max_spread))
 
+    def _kyle_bar(self, bar) -> KyleBar:                   # ← NEW
+        """Convert a pd.Series or dict bar to KyleBar."""
+        def get(key, default=0.0):
+            val = bar.get(key, default) if isinstance(bar, dict) \
+                else bar[key] if key in bar.index else default
+            try:
+                return float(val) if val is not None and not math.isnan(float(val)) else default
+            except (TypeError, ValueError):
+                return default
+
+        import pandas as pd
+        ts_raw = get("ts_sec")
+        ts = pd.to_datetime(ts_raw, unit="s", utc=True).to_pydatetime() \
+            if ts_raw else pd.Timestamp.now().to_pydatetime()
+
+        return KyleBar(
+            symbol       = str(bar.get("symbol", "") if isinstance(bar, dict) else bar.get("symbol", "")),
+            ts           = ts,
+            close        = get("close"),
+            volume_delta = get("volume_delta"),
+            tick_count   = get("tick_count"),
+            imbalance    = get("imbalance_last"),
+            spread_bps   = get("spread_bps", 1.0),
+        )
+
     # ─────────────────────────────────────
     # Strategy logic
     # ─────────────────────────────────────
@@ -110,12 +145,23 @@ class AvellanedaStoikovStrategy(BaseStrategy):
                 book.cancel_order(self.ask_id)
                 self.ask_id = None
             return
+
         sigma  = self._get_sigma(bar)
         T      = self._time_remaining(ts_sec)
         q      = book.inventory
 
-        r      = self._reservation_price(mid, q, sigma, T)
-        spread = self._optimal_spread(sigma, T)
+        r           = self._reservation_price(mid, q, sigma, T)
+        base_spread = self._optimal_spread(sigma, T)
+
+        # ── Kyle's Lambda adjustment ──────────────────────   # ← NEW
+        if self.use_kyle and self.kyle_model is not None:
+            self.kyle_model.update(self._kyle_bar(bar))
+            multiplier = self.kyle_model.spread_multiplier()
+            spread     = max(self.min_spread,
+                             min(base_spread * multiplier, self.max_spread))
+        else:
+            spread = base_spread
+        # ─────────────────────────────────────────────────────
 
         bid_price = round(r - spread / 2, 2)
         ask_price = round(r + spread / 2, 2)
@@ -157,73 +203,39 @@ class AvellanedaStoikovStrategy(BaseStrategy):
         ts_sec = int(ts_sec)
 
         # ── Imbalance persistence filter ──────────────────
-        # Only trust imbalance if it agrees with 30s moving average
-        # Spike that doesn't persist = likely fake orders
         imbalance_last = get("imbalance_last", 0) or 0
         imbalance_ma30 = get("imbalance_ma_30s", 0) or 0
         volume_ratio   = get("volume_ratio", 1.0) or 1.0
 
         imbalance_spike = (
-            abs(imbalance_last - imbalance_ma30) > 0.3  # large deviation
-            and volume_ratio < 0.5                        # without volume
+            abs(imbalance_last - imbalance_ma30) > 0.3
+            and volume_ratio < 0.5
         )
 
         if imbalance_spike:
-            # Suspected fake order — skip this bar
             return
-
-        # ── Rest of strategy logic unchanged ──────────────
-        bar_series = pd.Series(bar) if isinstance(bar, dict) else bar
-        sigma  = self._get_sigma(bar_series)
-        T      = self._time_remaining(ts_sec)
-        q      = engine.portfolio.get_position(engine.symbol)
-
-        r      = self._reservation_price(mid, q, sigma, T)
-        spread = self._optimal_spread(sigma, T)
-
-        bid_price = round(r - spread / 2, 2)
-        ask_price = round(r + spread / 2, 2)
-
-        if math.isnan(bid_price) or math.isnan(ask_price):
-            return
-
-        self.bid_id = engine.post_quote("BUY",  bid_price, 1)
-        self.ask_id = engine.post_quote("SELL", ask_price, 1)
-
-        def get(key, default=None):
-            val = bar.get(key, default) if isinstance(bar, dict) \
-                else bar[key] if key in bar.index else default
-            if val is None:
-                return default
-            try:
-                if math.isnan(float(val)):
-                    return default
-            except (TypeError, ValueError):
-                pass
-            return val
-
-        mid    = get("weighted_mid") or get("close")
-        ts_sec = get("ts_sec")
-
-        # Skip bar if no valid price or timestamp
-        if not mid or not ts_sec or mid <= 0:
-            return
-
-        mid    = float(mid)
-        ts_sec = int(ts_sec)
 
         bar_series = pd.Series(bar) if isinstance(bar, dict) else bar
         sigma  = self._get_sigma(bar_series)
         T      = self._time_remaining(ts_sec)
         q      = engine.portfolio.get_position(engine.symbol)
 
-        r      = self._reservation_price(mid, q, sigma, T)
-        spread = self._optimal_spread(sigma, T)
+        r           = self._reservation_price(mid, q, sigma, T)
+        base_spread = self._optimal_spread(sigma, T)
+
+        # ── Kyle's Lambda adjustment ──────────────────────   # ← NEW
+        if self.use_kyle and self.kyle_model is not None:
+            self.kyle_model.update(self._kyle_bar(bar))
+            multiplier = self.kyle_model.spread_multiplier()
+            spread     = max(self.min_spread,
+                             min(base_spread * multiplier, self.max_spread))
+        else:
+            spread = base_spread
+        # ─────────────────────────────────────────────────────
 
         bid_price = round(r - spread / 2, 2)
         ask_price = round(r + spread / 2, 2)
 
-        # Sanity check prices
         if math.isnan(bid_price) or math.isnan(ask_price):
             return
 
