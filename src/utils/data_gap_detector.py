@@ -244,7 +244,7 @@ def run_detector(date: str, verbose: bool = False) -> dict:
     """Main detection run. Returns full report dict."""
     log.info(f"Running gap detector for date: {date}")
 
-    client = storage.Client()
+    client = storage.Client(project="hedge-fund-494103")
     symbols = list_processed_symbols(client, date)
     log.info(f"Found {len(symbols)} processed symbols for {date}")
 
