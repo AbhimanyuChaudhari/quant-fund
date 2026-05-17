@@ -1,0 +1,10 @@
+1. The news api is created need to add that as a signal in mm_strategy file
+2. need to create 4 crontabs on VM for getting the new and running it daily they are in order
+      a. event_calender
+      b. news_collector
+      c. processor 
+      d. aggregator
+3. Need to start working on fundamentals as well look for different sources free or paid 
+4. Backtesting the data daily to see if there is any edge
+5. expand the options horizone by taking more options symbols other than banknifty and Nifty 
+6. After everything and a successfull run expand the markets(entering new markets)
