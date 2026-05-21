@@ -13,12 +13,6 @@ load_dotenv(dotenv_path=ENV_PATH)
 PROJECT_ID  = os.getenv("GCP_PROJECT_ID", "hedge-fund-494103")
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "hedge-fund-494103-marketdata")
 
-# NSE market hours in IST:  09:15 → 15:30
-# IST = UTC + 5:30 = UTC + 19800 seconds
-# So to filter by IST time-of-day using UTC epoch:
-#   IST seconds-of-day = (ts_sec + 19800) % 86400
-# 09:15 IST = 9*3600 + 15*60 = 33300
-# 15:30 IST = 15*3600 + 30*60 = 55800
 MARKET_OPEN_IST  = 33300   # 09:15 IST
 MARKET_CLOSE_IST = 55800   # 15:30 IST
 
@@ -32,18 +26,14 @@ def _get_con() -> duckdb.DuckDBPyConnection:
 
 
 def _market_filter(symbol: str = "") -> str:
-    """SQL fragment: filter to market hours IST.
-    NSE equity: 09:15-15:30 IST
-    CDS currency: 09:00-17:00 IST
-    """
-    is_currency = any(x in symbol.upper() 
+    is_currency = any(x in symbol.upper()
                       for x in ["USDINR", "EURINR", "GBPINR", "JPYINR"])
     if is_currency:
-        open_ist  = 9 * 3600           # 09:00 IST = 32400
-        close_ist = 17 * 3600          # 17:00 IST = 61200
+        open_ist  = 9 * 3600
+        close_ist = 17 * 3600
     else:
-        open_ist  = MARKET_OPEN_IST    # 09:15 IST = 33300
-        close_ist = MARKET_CLOSE_IST   # 15:30 IST = 55800
+        open_ist  = MARKET_OPEN_IST
+        close_ist = MARKET_CLOSE_IST
 
     return f"""
         ((ts_sec + 19800) % 86400) >= {open_ist}
@@ -54,17 +44,22 @@ def _market_filter(symbol: str = "") -> str:
 def load_day(symbol: str, date: str,
              market_hours_only: bool = True) -> pd.DataFrame:
     """
-    Load one day of processed features for a symbol from GCS.
-
-    Args:
-        symbol:            e.g. 'NIFTY26MAYFUT'
-        date:              e.g. '2026-04-30'
-        market_hours_only: filter to 09:15-15:30 IST (default True)
-
-    Returns:
-        DataFrame with 33 feature columns sorted by ts_sec.
-        Empty DataFrame if file not found.
+    Load one day of processed features for a symbol.
+    Checks local DuckDB cache first — falls back to GCS if not cached.
+    Cache miss automatically populates the cache for next time.
     """
+    # ── DuckDB cache check (5 lines) ──────────────────────────────────────────
+    try:
+        from src.backtest.duckdb_cache import LocalCache
+        _cache = LocalCache()
+        _df    = _cache.load(symbol, date, market_hours_only)
+        if not _df.empty:
+            print(f"[data_loader] Cache: {len(_df):,} bars | {symbol} | {date}")
+            return _df
+    except Exception:
+        pass
+    # ─────────────────────────────────────────────────────────────────────────
+
     con      = _get_con()
     gcs_path = f"gs://{BUCKET_NAME}/processed/features/{symbol}/{date}.parquet"
 
@@ -83,6 +78,15 @@ def load_day(symbol: str, date: str,
     """).df()
 
     print(f"[data_loader] Loaded {len(df):,} bars | {symbol} | {date}")
+
+    # ── Populate cache on GCS hit so next call is instant ─────────────────────
+    try:
+        from src.backtest.duckdb_cache import LocalCache
+        LocalCache().insert(symbol, date, df)
+    except Exception:
+        pass
+    # ─────────────────────────────────────────────────────────────────────────
+
     return df
 
 
@@ -90,27 +94,17 @@ def load_date_range(symbol: str, start: str, end: str,
                     market_hours_only: bool = True) -> pd.DataFrame:
     """
     Load multiple days of processed features for a symbol.
-    Loads each day separately and concatenates — avoids DuckDB glob issues.
-
-    Args:
-        symbol:  e.g. 'NIFTY26MAYFUT'
-        start:   e.g. '2026-04-29'
-        end:     e.g. '2026-04-30'
-        market_hours_only: filter to market hours (default True)
-
-    Returns:
-        Combined DataFrame across all dates, sorted by ts_sec.
+    Each day goes through load_day() so cache is used automatically.
     """
     start_dt = datetime.strptime(start, "%Y-%m-%d").date()
     end_dt   = datetime.strptime(end,   "%Y-%m-%d").date()
 
-    # Find all available parquet files in date range
     fs    = gcsfs.GCSFileSystem(project=PROJECT_ID)
     files = fs.glob(f"{BUCKET_NAME}/processed/features/{symbol}/*.parquet")
 
     frames = []
     for f in sorted(files):
-        fname = Path(f).stem  # e.g. '2026-04-30'
+        fname = Path(f).stem
         try:
             fdate = datetime.strptime(fname, "%Y-%m-%d").date()
         except ValueError:
@@ -124,21 +118,16 @@ def load_date_range(symbol: str, start: str, end: str,
         print(f"[data_loader] No data: {symbol} | {start} → {end}")
         return pd.DataFrame()
 
-    combined = pd.concat(frames, ignore_index=True).sort_values("ts_sec").reset_index(drop=True)
+    combined = pd.concat(frames, ignore_index=True).sort_values(
+        "ts_sec"
+    ).reset_index(drop=True)
     print(f"[data_loader] Total: {len(combined):,} bars | {symbol} | {start} → {end}")
     return combined
 
 
 def iter_bars(symbol: str, start: str, end: str,
               market_hours_only: bool = True) -> Iterator[pd.Series]:
-    """
-    Iterate over bars one at a time for the backtest engine.
-    Yields one pd.Series per second bar.
-
-    Usage:
-        for bar in iter_bars('NIFTY26MAYFUT', '2026-04-30', '2026-04-30'):
-            strategy.on_bar(bar)
-    """
+    """Iterate over bars one at a time for the backtest engine."""
     df = load_date_range(symbol, start, end, market_hours_only)
     if df.empty:
         return
@@ -147,7 +136,6 @@ def iter_bars(symbol: str, start: str, end: str,
 
 
 if __name__ == "__main__":
-    # Test 1 — load single day
     print("=== Test 1: load_day ===")
     df = load_day("NIFTY26MAYFUT", "2026-04-30")
     if not df.empty:
@@ -157,7 +145,6 @@ if __name__ == "__main__":
         print(df[["ts_ist", "open", "close", "spread_mean",
                    "imbalance_last", "realized_vol_60s"]].head(5).to_string())
 
-    # Test 2 — iterate bars
     print("\n=== Test 2: iter_bars (first 5) ===")
     count = 0
     for bar in iter_bars("NIFTY26MAYFUT", "2026-04-30", "2026-04-30"):
