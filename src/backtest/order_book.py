@@ -104,16 +104,6 @@ class SimulatedOrderBook:
     # ─────────────────────────────────────
 
     def process_bar(self, bar) -> List[Fill]:
-        """
-        Check all open orders against the current bar.
-        Fill any orders where price crossed our limit.
-
-        Args:
-            bar: pd.Series with at minimum: ts_sec, low, high
-
-        Returns:
-            List of Fill objects generated this bar.
-        """
         bar_fills = []
         ts   = int(bar["ts_sec"])
         low  = bar["low"]
@@ -124,16 +114,23 @@ class SimulatedOrderBook:
                 continue
 
             filled = False
-
             if order.side == Side.BUY and low <= order.price:
                 filled = True
             elif order.side == Side.SELL and high >= order.price:
                 filled = True
 
             if filled:
+                # ── Check inventory AFTER this fill would apply ────────────────
+                projected = self.inventory + (
+                    order.quantity if order.side == Side.BUY
+                    else -order.quantity
+                )
+                if abs(projected) > self.max_inventory:
+                    order.status = OrderStatus.CANCELLED
+                    continue
+
                 order.status  = OrderStatus.FILLED
                 order.fill_ts = ts
-
                 fill = Fill(
                     order_id  = order.order_id,
                     side      = order.side,
@@ -143,8 +140,6 @@ class SimulatedOrderBook:
                 )
                 self.fills.append(fill)
                 bar_fills.append(fill)
-
-                # Update inventory
                 if order.side == Side.BUY:
                     self.inventory += order.quantity
                 else:

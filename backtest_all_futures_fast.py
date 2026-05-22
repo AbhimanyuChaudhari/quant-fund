@@ -1,27 +1,30 @@
 """
 Fast Batch Backtest — All Stock Futures
 ========================================
-Drop-in replacement for backtest_all_futures.py using the
-vectorized NumPy + Numba engine.
-
-Speed comparison:
-    Original:  ~4 min per day across 84 symbols
-    Fast:      ~10-15 seconds per day across 84 symbols
+Supports both V1 (fast Numba engine) and V2 (Ricci Hawkes-Alpha).
 
 Usage:
+    # V1 — fast Numba engine (default)
     python backtest_all_futures_fast.py --start 2026-05-18 --end 2026-05-18
-    python backtest_all_futures_fast.py --start 2026-05-13 --end 2026-05-20
-    python backtest_all_futures_fast.py --gamma 0.005 --min-spread 0.25
+
+    # V2 — Ricci Hawkes-Alpha (slower, uses original engine)
+    python backtest_all_futures_fast.py --start 2026-05-18 --end 2026-05-18 --model v2
+
+    # Multi-day
+    python backtest_all_futures_fast.py --start 2026-05-13 --end 2026-05-20 --model v2
+
+Speed:
+    V1 (Numba):  ~10-15 seconds per day across 84 symbols
+    V2 (engine): ~2-3 minutes per day across 84 symbols
 """
 
 import argparse
 import time
 import gcsfs
 import pandas as pd
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.backtest.fill_simulator_fast import run_fast_backtest
+from src.backtest.simulators.fill_simulator_fast import run_fast_backtest
 from src.backtest.data_loader import load_day
 
 PROJECT_ID  = "hedge-fund-494103"
@@ -35,8 +38,11 @@ INDEX_FUTURES = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def get_lot_sizes() -> dict:
-    """Load lot sizes from Zerodha."""
     try:
         from src.utils.auth import get_secret
         from kiteconnect import KiteConnect
@@ -53,11 +59,8 @@ def get_lot_sizes() -> dict:
 
 
 def get_symbols(start: str, end: str) -> list:
-    """Get all stock futures with processed data in date range."""
     fs    = gcsfs.GCSFileSystem(project=PROJECT_ID)
-    files = fs.glob(
-        f"{BUCKET_NAME}/processed/features/*26MAYFUT/*.parquet"
-    )
+    files = fs.glob(f"{BUCKET_NAME}/processed/features/*26MAYFUT/*.parquet")
     symbols = set()
     for f in files:
         parts    = f.split("/")
@@ -68,28 +71,27 @@ def get_symbols(start: str, end: str) -> list:
     return sorted(symbols)
 
 
-def run_one_fast(symbol: str, start: str, end: str,
-                 lot_sizes: dict, params: dict,
-                 min_bars: int = 100) -> dict:
-    """Run fast backtest for one symbol across date range."""
+# ─────────────────────────────────────────────────────────────────────────────
+# V1 — fast Numba runner
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_one_v1(symbol: str, start: str, end: str,
+               lot_sizes: dict, params: dict,
+               min_bars: int = 100) -> dict:
     from datetime import datetime, timedelta
 
     name     = symbol.replace("26MAYFUT", "").replace("26JUNFUT", "")
     lot_size = lot_sizes.get(name, 75)
-
-    # Detect instrument type
-    if any(x in symbol.upper() for x in ['USDINR', 'EURINR', 'GBPINR', 'JPYINR']):
-        instrument_type = 'currency_futures'
-    else:
-        instrument_type = 'equity_futures'
+    inst     = 'currency_futures' if any(
+        x in symbol.upper() for x in ['USDINR', 'EURINR']
+    ) else 'equity_futures'
 
     try:
-        # Load all days in range
         start_dt = datetime.strptime(start, '%Y-%m-%d')
         end_dt   = datetime.strptime(end,   '%Y-%m-%d')
         frames   = []
+        current  = start_dt
 
-        current = start_dt
         while current <= end_dt:
             date_str = current.strftime('%Y-%m-%d')
             df = load_day(symbol, date_str, market_hours_only=True)
@@ -100,8 +102,7 @@ def run_one_fast(symbol: str, start: str, end: str,
 
         if not frames:
             return {'symbol': symbol, 'lot_size': lot_size,
-                    'net_pnl': 0, 'bars': 0, 'ok': False,
-                    'error': 'no data'}
+                    'net_pnl': 0, 'bars': 0, 'ok': False, 'error': 'no data'}
 
         full_df = pd.concat(frames, ignore_index=True).sort_values('ts_sec')
 
@@ -120,7 +121,7 @@ def run_one_fast(symbol: str, start: str, end: str,
             lot_size         = lot_size,
             max_inventory    = params.get('max_inv', 5),
             queue_aggression = params.get('queue_agg', 0.3),
-            instrument_type  = instrument_type,
+            instrument_type  = inst,
         )
 
         return {
@@ -140,12 +141,102 @@ def run_one_fast(symbol: str, start: str, end: str,
 
     except Exception as e:
         return {'symbol': symbol, 'lot_size': lot_size,
-                'net_pnl': 0, 'bars': 0, 'ok': False,
-                'error': str(e)[:80]}
+                'net_pnl': 0, 'bars': 0, 'ok': False, 'error': str(e)[:80]}
 
 
-def print_results(results: list, errors: list, total_symbols: int):
-    """Print results in same format as original backtest_all_futures.py"""
+# ─────────────────────────────────────────────────────────────────────────────
+# V2 — Ricci Hawkes-Alpha runner (uses original BacktestEngine)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_one_v2(symbol: str, start: str, end: str,
+               lot_sizes: dict, params: dict,
+               min_bars: int = 100) -> dict:
+    from datetime import datetime, timedelta
+    from src.backtest.engines.engine_base import BacktestEngine, BacktestConfig
+    from src.backtest.strategy import StrategyConfig
+    from src.backtest.models.v2_ricci_hawkes_alpha import (
+        RicciHawkesAlphaStrategy, V2Params
+    )
+
+    name     = symbol.replace("26MAYFUT", "").replace("26JUNFUT", "")
+    lot_size = lot_sizes.get(name, 75)
+
+    try:
+        # Check data exists first
+        start_dt = datetime.strptime(start, '%Y-%m-%d')
+        end_dt   = datetime.strptime(end,   '%Y-%m-%d')
+        has_data = False
+        current  = start_dt
+
+        while current <= end_dt:
+            df = load_day(symbol, current.strftime('%Y-%m-%d'),
+                          market_hours_only=True)
+            if not df.empty and len(df) >= min_bars:
+                has_data = True
+                break
+            current += timedelta(days=1)
+
+        if not has_data:
+            return {'symbol': symbol, 'lot_size': lot_size,
+                    'net_pnl': 0, 'bars': 0, 'ok': False, 'error': 'no data'}
+
+        # Build V2 params from CLI params
+        v2_params = V2Params(
+            phi        = params.get('phi', 0.001),
+            min_spread = params['min_spread'],
+            max_spread = params['max_spread'],
+            open_mult  = params.get('open_mult', 2.0),
+            rho        = params.get('rho', 0.30),
+            beta       = params.get('beta', 1.0),
+            theta      = params.get('theta', 2.0),
+            eta        = params.get('eta', 0.5),
+            nu         = params.get('nu', 0.2),
+            zeta       = params.get('zeta', 0.5),
+        )
+
+        sc      = StrategyConfig(
+            symbol        = symbol,
+            lot_size      = lot_size,
+            max_inventory = params.get('max_inv', 5),
+        )
+        strat   = RicciHawkesAlphaStrategy(sc, v2_params)
+        config  = BacktestConfig(
+            symbol        = symbol,
+            start         = start,
+            end           = end,
+            lot_size      = lot_size,
+            max_inventory = params.get('max_inv', 5),
+        )
+
+        metrics = BacktestEngine(config, strat).run()
+
+        return {
+            'symbol':    symbol,
+            'lot_size':  lot_size,
+            'gross_pnl': round(metrics.gross_pnl, 2),
+            'costs':     round(metrics.total_costs, 2),
+            'net_pnl':   round(metrics.net_pnl, 2),
+            'fills':     metrics.total_fills,
+            'fill_rate': round(metrics.total_fills /
+                               max(metrics.max_inventory, 1), 2),
+            'win_rate':  round(metrics.win_rate * 100, 1),
+            'sharpe':    round(metrics.sharpe_ratio, 2),
+            'max_dd':    round(metrics.max_drawdown, 2),
+            'bars':      metrics.max_inventory,   # reuse field for display
+            'ok':        True,
+        }
+
+    except Exception as e:
+        return {'symbol': symbol, 'lot_size': lot_size,
+                'net_pnl': 0, 'bars': 0, 'ok': False, 'error': str(e)[:80]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Results printer
+# ─────────────────────────────────────────────────────────────────────────────
+
+def print_results(results: list, errors: list,
+                  total_symbols: int, model: str):
     if not results:
         print("\nNo results.")
         return
@@ -154,7 +245,7 @@ def print_results(results: list, errors: list, total_symbols: int):
     profitable = [r for r in results if r['net_pnl'] > 0]
 
     print(f"\n{'='*80}")
-    print(f"  FULL RANKING -- {len(results)} symbols")
+    print(f"  FULL RANKING -- {len(results)} symbols  [Model: {model.upper()}]")
     print(f"{'='*80}")
     print(f"\n  {'#':>3} {'Symbol':<25} {'Lot':>4} "
           f"{'Gross':>11} {'Costs':>10} {'Net':>11} "
@@ -179,14 +270,14 @@ def print_results(results: list, errors: list, total_symbols: int):
         total = sum(r['net_pnl'] for r in profitable)
         print(f"  Combined net PnL if trading all: Rs.+{total:,.0f}\n")
         print(f"  {'Symbol':<25} {'Lot':>4} {'Net PnL':>12} "
-              f"{'Fill%':>7} {'Win%':>6} {'MaxDD':>10}")
-        print("  " + "-"*68)
+              f"{'Fills':>7} {'Win%':>6} {'MaxDD':>12}")
+        print("  " + "-"*72)
         for r in profitable:
             print(f"  {r['symbol']:<25} {r['lot_size']:>4} "
                   f"Rs.+{r['net_pnl']:>10,.0f} "
-                  f"{r['fill_rate']:>6.1f}% "
+                  f"{r['fills']:>7} "
                   f"{r['win_rate']:>5.1f}% "
-                  f"-Rs.{abs(r['max_dd']):>7,.0f}")
+                  f"-Rs.{abs(r['max_dd']):>9,.0f}")
 
     if errors:
         print(f"\n  {len(errors)} errors:")
@@ -198,21 +289,40 @@ def print_results(results: list, errors: list, total_symbols: int):
           f"Skipped: {skipped} | Errors: {len(errors)}\n")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Fast parallel batch backtest — all stock futures"
+        description="Batch backtest — all stock futures (V1 fast or V2 Ricci)"
     )
-    parser.add_argument("--start",           default="2026-05-18")
-    parser.add_argument("--end",             default="2026-05-18")
-    parser.add_argument("--min-bars",        type=int,   default=100)
-    parser.add_argument("--workers",         type=int,   default=8)
-    parser.add_argument("--gamma",           type=float, default=0.001)
-    parser.add_argument("--kappa",           type=float, default=1.5)
-    parser.add_argument("--min-spread",      type=float, default=0.10)
-    parser.add_argument("--max-spread",      type=float, default=10.0)
-    parser.add_argument("--open-mult",       type=float, default=2.0)
-    parser.add_argument("--queue-aggression",type=float, default=0.3)
-    parser.add_argument("--max-inventory",   type=int,   default=5)
+    parser.add_argument("--start",            default="2026-05-18")
+    parser.add_argument("--end",              default="2026-05-18")
+    parser.add_argument("--model",            default="v1",
+                        choices=["v1", "v2"],
+                        help="v1=fast Numba A-S, v2=Ricci Hawkes-Alpha")
+    parser.add_argument("--min-bars",         type=int,   default=100)
+    parser.add_argument("--workers",          type=int,   default=8)
+
+    # V1 params
+    parser.add_argument("--gamma",            type=float, default=0.001)
+    parser.add_argument("--kappa",            type=float, default=1.5)
+    parser.add_argument("--min-spread",       type=float, default=0.10)
+    parser.add_argument("--max-spread",       type=float, default=10.0)
+    parser.add_argument("--open-mult",        type=float, default=2.0)
+    parser.add_argument("--queue-aggression", type=float, default=0.3)
+    parser.add_argument("--max-inventory",    type=int,   default=5)
+
+    # V2 params
+    parser.add_argument("--phi",   type=float, default=0.001)
+    parser.add_argument("--rho",   type=float, default=0.30)
+    parser.add_argument("--beta",  type=float, default=1.0)
+    parser.add_argument("--theta", type=float, default=2.0)
+    parser.add_argument("--eta",   type=float, default=0.5)
+    parser.add_argument("--nu",    type=float, default=0.2)
+    parser.add_argument("--zeta",  type=float, default=0.5)
+
     args = parser.parse_args()
 
     params = {
@@ -223,15 +333,27 @@ def main():
         'open_mult':  args.open_mult,
         'queue_agg':  args.queue_aggression,
         'max_inv':    args.max_inventory,
+        'phi':        args.phi,
+        'rho':        args.rho,
+        'beta':       args.beta,
+        'theta':      args.theta,
+        'eta':        args.eta,
+        'nu':         args.nu,
+        'zeta':       args.zeta,
     }
 
     t0 = time.perf_counter()
 
     print(f"\n{'='*70}")
-    print(f"  Fast Batch Backtest — All Stock Futures")
+    print(f"  Batch Backtest — All Stock Futures  [Model: {args.model.upper()}]")
     print(f"  Period:  {args.start} -> {args.end}")
-    print(f"  Params:  gamma={args.gamma} min_spread={args.min_spread} "
-          f"kappa={args.kappa} open_mult={args.open_mult}")
+    if args.model == 'v1':
+        print(f"  Params:  gamma={args.gamma} min_spread={args.min_spread} "
+              f"kappa={args.kappa} open_mult={args.open_mult}")
+    else:
+        print(f"  Params:  phi={args.phi} rho={args.rho} "
+              f"beta={args.beta} eta={args.eta} nu={args.nu} "
+              f"zeta={args.zeta}")
     print(f"  Workers: {args.workers}")
     print(f"{'='*70}\n")
 
@@ -248,34 +370,34 @@ def main():
 
     results = []
     errors  = []
+    counter = [0]
+
+    # Pick runner based on model
+    run_one = run_one_v1 if args.model == 'v1' else run_one_v2
 
     print(f"{'#':>3} {'Symbol':<30} {'NetPnL':>12} "
-          f"{'Fills':>6} {'Rate':>6} {'Bars':>7}")
+          f"{'Fills':>6} {'Win%':>6} {'Sharpe':>7}")
     print("-"*65)
-
-    counter = [0]
 
     def handle_result(r):
         counter[0] += 1
         i = counter[0]
         if not r['ok']:
             errors.append(r)
-            if 'only' in r.get('error', '') or 'insufficient' in r.get('error', ''):
-                print(f"{i:>3} {r['symbol']:<30}  SKIP ({r.get('error', '')})")
-            else:
-                print(f"{i:>3} {r['symbol']:<30}  ERROR: {r.get('error','')[:35]}")
+            print(f"{i:>3} {r['symbol']:<30}  "
+                  f"SKIP ({r.get('error', '')[:40]})")
             return
         results.append(r)
         sign = "+" if r['net_pnl'] >= 0 else ""
         print(f"{i:>3} {r['symbol']:<30}  "
               f"Rs.{sign}{r['net_pnl']:>9,.0f}  "
               f"{r['fills']:>5}  "
-              f"{r['fill_rate']:>5.1f}%  "
-              f"{r['bars']:>6}")
+              f"{r['win_rate']:>5.1f}%  "
+              f"{r['sharpe']:>6.2f}")
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(run_one_fast, sym, args.start, args.end,
+            pool.submit(run_one, sym, args.start, args.end,
                         lot_sizes, params, args.min_bars): sym
             for sym in symbols
         }
@@ -283,9 +405,9 @@ def main():
             handle_result(future.result())
 
     elapsed = time.perf_counter() - t0
-    print_results(results, errors, len(symbols))
+    print_results(results, errors, len(symbols), args.model)
     print(f"  Total time: {elapsed:.1f}s  "
-          f"({elapsed/len(symbols):.2f}s per symbol)\n")
+          f"({elapsed/max(len(symbols),1):.2f}s per symbol)\n")
 
 
 if __name__ == "__main__":
