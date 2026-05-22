@@ -20,7 +20,7 @@ import argparse
 import pathlib
 from src.trading.engine import LiveEngine
 from src.trading.risk import RiskConfig
-from src.backtest.strategy import StrategyConfig
+from src.backtest.models.v1_avellaneda_stoikov.strategy import StrategyConfig
 from src.backtest.mm_strategy import AvellanedaStoikovStrategy
 
 

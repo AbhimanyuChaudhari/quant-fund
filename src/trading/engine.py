@@ -29,7 +29,7 @@ from src.trading.risk import RiskManager, RiskConfig
 from src.trading.portfolio import Portfolio
 from src.trading.order_manager import OrderManager
 from src.trading.feature_engine import FeatureEngine, TickBar
-from src.backtest.strategy import BaseStrategy
+from src.backtest.models.v1_avellaneda_stoikov.strategy import BaseStrategy
 from src.utils.auth import get_kite_client
 
 logging.basicConfig(

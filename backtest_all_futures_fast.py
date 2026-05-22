@@ -4,18 +4,21 @@ Fast Batch Backtest — All Stock Futures
 Supports both V1 (fast Numba engine) and V2 (Ricci Hawkes-Alpha).
 
 Usage:
-    # V1 — fast Numba engine (default)
+    # V1 — default params
     python backtest_all_futures_fast.py --start 2026-05-18 --end 2026-05-18
 
-    # V2 — Ricci Hawkes-Alpha (slower, uses original engine)
+    # V1 — with optimized per-symbol params from grid search
+    python backtest_all_futures_fast.py --start 2026-05-22 --end 2026-05-22 --use-optimal-params
+
+    # V2 — fast Numba version
     python backtest_all_futures_fast.py --start 2026-05-18 --end 2026-05-18 --model v2
 
-    # Multi-day
-    python backtest_all_futures_fast.py --start 2026-05-13 --end 2026-05-20 --model v2
+    # V2 — with optimized params (after running grid_search_v2.py)
+    python backtest_all_futures_fast.py --model v2 --use-optimal-params
 
 Speed:
-    V1 (Numba):  ~10-15 seconds per day across 84 symbols
-    V2 (engine): ~2-3 minutes per day across 84 symbols
+    V1 (Numba):  ~10-15 seconds per day across 85 symbols
+    V2 (Numba):  ~30 seconds per day across 85 symbols
 """
 
 import argparse
@@ -26,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.backtest.simulators.fill_simulator_fast import run_fast_backtest
 from src.backtest.data_loader import load_day
+from src.backtest.param_loader import get_symbol_params
 
 PROJECT_ID  = "hedge-fund-494103"
 BUCKET_NAME = "hedge-fund-494103-marketdata"
@@ -69,6 +73,36 @@ def get_symbols(start: str, end: str) -> list:
         if sym not in INDEX_FUTURES and start <= date_str <= end:
             symbols.add(sym)
     return sorted(symbols)
+
+
+def resolve_params(symbol: str, global_params: dict,
+                   use_optimal: bool, model: str) -> dict:
+    """
+    Return params for a symbol.
+    If use_optimal=True: load per-symbol optimized params,
+                         fall back to global_params if not found.
+    If use_optimal=False: use global_params for all symbols.
+    """
+    if not use_optimal:
+        return global_params
+
+    # Load optimized params for this symbol
+    opt = get_symbol_params(symbol, model=model)
+
+    # Merge: optimized params override global, fixed params preserved
+    merged = global_params.copy()
+    merged['gamma']      = opt.get('gamma',      global_params['gamma'])
+    merged['kappa']      = opt.get('kappa',       global_params['kappa'])
+    merged['min_spread'] = opt.get('min_spread',  global_params['min_spread'])
+    merged['open_mult']  = opt.get('open_mult',   global_params['open_mult'])
+
+    # V2 params if available
+    if model == 'v2':
+        for k in ['phi', 'rho', 'beta', 'theta', 'eta', 'nu', 'zeta']:
+            if k in opt:
+                merged[k] = opt[k]
+
+    return merged
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +171,9 @@ def run_one_v1(symbol: str, start: str, end: str,
             'max_dd':    result.max_drawdown,
             'bars':      result.bars_processed,
             'ok':        True,
+            # Show which params were used
+            'gamma':     params['gamma'],
+            'open_mult': params.get('open_mult', 2.0),
         }
 
     except Exception as e:
@@ -145,84 +182,82 @@ def run_one_v1(symbol: str, start: str, end: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# V2 — Ricci Hawkes-Alpha runner (uses original BacktestEngine)
+# V2 — fast Numba V2 runner
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_one_v2(symbol: str, start: str, end: str,
                lot_sizes: dict, params: dict,
                min_bars: int = 100) -> dict:
     from datetime import datetime, timedelta
-    from src.backtest.engines.engine_base import BacktestEngine, BacktestConfig
-    from src.backtest.strategy import StrategyConfig
-    from src.backtest.models.v2_ricci_hawkes_alpha import (
-        RicciHawkesAlphaStrategy, V2Params
-    )
+    from src.backtest.simulators.fill_simulator_v2_fast import run_fast_v2_backtest
 
     name     = symbol.replace("26MAYFUT", "").replace("26JUNFUT", "")
     lot_size = lot_sizes.get(name, 75)
+    inst     = 'currency_futures' if any(
+        x in symbol.upper() for x in ['USDINR', 'EURINR']
+    ) else 'equity_futures'
 
     try:
-        # Check data exists first
         start_dt = datetime.strptime(start, '%Y-%m-%d')
         end_dt   = datetime.strptime(end,   '%Y-%m-%d')
-        has_data = False
+        frames   = []
         current  = start_dt
 
         while current <= end_dt:
-            df = load_day(symbol, current.strftime('%Y-%m-%d'),
-                          market_hours_only=True)
-            if not df.empty and len(df) >= min_bars:
-                has_data = True
-                break
+            date_str = current.strftime('%Y-%m-%d')
+            df = load_day(symbol, date_str, market_hours_only=True)
+            if not df.empty:
+                df['_date'] = date_str
+                frames.append(df)
             current += timedelta(days=1)
 
-        if not has_data:
+        if not frames:
             return {'symbol': symbol, 'lot_size': lot_size,
                     'net_pnl': 0, 'bars': 0, 'ok': False, 'error': 'no data'}
 
-        # Build V2 params from CLI params
-        v2_params = V2Params(
-            phi        = params.get('phi', 0.001),
-            min_spread = params['min_spread'],
-            max_spread = params['max_spread'],
-            open_mult  = params.get('open_mult', 2.0),
-            rho        = params.get('rho', 0.30),
-            beta       = params.get('beta', 1.0),
-            theta      = params.get('theta', 2.0),
-            eta        = params.get('eta', 0.5),
-            nu         = params.get('nu', 0.2),
-            zeta       = params.get('zeta', 0.5),
-        )
+        full_df = pd.concat(frames, ignore_index=True).sort_values('ts_sec')
 
-        sc      = StrategyConfig(
-            symbol        = symbol,
-            lot_size      = lot_size,
-            max_inventory = params.get('max_inv', 5),
-        )
-        strat   = RicciHawkesAlphaStrategy(sc, v2_params)
-        config  = BacktestConfig(
-            symbol        = symbol,
-            start         = start,
-            end           = end,
-            lot_size      = lot_size,
-            max_inventory = params.get('max_inv', 5),
-        )
+        if len(full_df) < min_bars:
+            return {'symbol': symbol, 'lot_size': lot_size,
+                    'net_pnl': 0, 'bars': len(full_df), 'ok': False,
+                    'error': f'only {len(full_df)} bars'}
 
-        metrics = BacktestEngine(config, strat).run()
+        result = run_fast_v2_backtest(
+            df                   = full_df,
+            beta                 = params.get('beta', 1.0),
+            theta                = params.get('theta', 2.0),
+            eta                  = params.get('eta', 0.5),
+            nu                   = params.get('nu', 0.2),
+            rho                  = params.get('rho', 0.30),
+            zeta                 = params.get('zeta', 0.5),
+            epsilon_plus         = params.get('epsilon_plus', 0.002),
+            epsilon_minus        = params.get('epsilon_minus', 0.002),
+            beta_kappa           = params.get('beta_kappa', 0.5),
+            theta_kappa          = params.get('theta_kappa', 1.5),
+            eta_kappa            = params.get('eta_kappa', 0.3),
+            nu_kappa             = params.get('nu_kappa', 0.1),
+            phi                  = params.get('phi', 0.001),
+            min_spread           = params['min_spread'],
+            max_spread           = params['max_spread'],
+            open_mult            = params.get('open_mult', 2.0),
+            lot_size             = lot_size,
+            max_inventory        = params.get('max_inv', 5),
+            classifier_threshold = params.get('classifier_threshold', 0.50),
+            instrument_type      = inst,
+        )
 
         return {
             'symbol':    symbol,
             'lot_size':  lot_size,
-            'gross_pnl': round(metrics.gross_pnl, 2),
-            'costs':     round(metrics.total_costs, 2),
-            'net_pnl':   round(metrics.net_pnl, 2),
-            'fills':     metrics.total_fills,
-            'fill_rate': round(metrics.total_fills /
-                               max(metrics.max_inventory, 1), 2),
-            'win_rate':  round(metrics.win_rate * 100, 1),
-            'sharpe':    round(metrics.sharpe_ratio, 2),
-            'max_dd':    round(metrics.max_drawdown, 2),
-            'bars':      metrics.max_inventory,   # reuse field for display
+            'gross_pnl': round(result.gross_pnl, 2),
+            'costs':     round(result.total_costs, 2),
+            'net_pnl':   round(result.net_pnl, 2),
+            'fills':     result.total_fills,
+            'fill_rate': result.fill_rate,
+            'win_rate':  result.win_rate,
+            'sharpe':    result.sharpe_ratio,
+            'max_dd':    result.max_drawdown,
+            'bars':      result.bars_processed,
             'ok':        True,
         }
 
@@ -236,7 +271,8 @@ def run_one_v2(symbol: str, start: str, end: str,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_results(results: list, errors: list,
-                  total_symbols: int, model: str):
+                  total_symbols: int, model: str,
+                  use_optimal: bool = False):
     if not results:
         print("\nNo results.")
         return
@@ -244,8 +280,11 @@ def print_results(results: list, errors: list,
     results.sort(key=lambda x: x['net_pnl'], reverse=True)
     profitable = [r for r in results if r['net_pnl'] > 0]
 
+    opt_tag = " [OPTIMIZED PARAMS]" if use_optimal else ""
+
     print(f"\n{'='*80}")
-    print(f"  FULL RANKING -- {len(results)} symbols  [Model: {model.upper()}]")
+    print(f"  FULL RANKING -- {len(results)} symbols  "
+          f"[Model: {model.upper()}{opt_tag}]")
     print(f"{'='*80}")
     print(f"\n  {'#':>3} {'Symbol':<25} {'Lot':>4} "
           f"{'Gross':>11} {'Costs':>10} {'Net':>11} "
@@ -297,24 +336,28 @@ def main():
     parser = argparse.ArgumentParser(
         description="Batch backtest — all stock futures (V1 fast or V2 Ricci)"
     )
-    parser.add_argument("--start",            default="2026-05-18")
-    parser.add_argument("--end",              default="2026-05-18")
-    parser.add_argument("--model",            default="v1",
+    parser.add_argument("--start",             default="2026-05-18")
+    parser.add_argument("--end",               default="2026-05-18")
+    parser.add_argument("--model",             default="v1",
                         choices=["v1", "v2"],
                         help="v1=fast Numba A-S, v2=Ricci Hawkes-Alpha")
-    parser.add_argument("--min-bars",         type=int,   default=100)
-    parser.add_argument("--workers",          type=int,   default=8)
+    parser.add_argument("--use-optimal-params", action="store_true",
+                        help="Load per-symbol optimized params from "
+                             "research/findings/v1_optimal_params.json")
+    parser.add_argument("--min-bars",          type=int,   default=100)
+    parser.add_argument("--workers",           type=int,   default=8)
 
-    # V1 params
-    parser.add_argument("--gamma",            type=float, default=0.001)
-    parser.add_argument("--kappa",            type=float, default=1.5)
-    parser.add_argument("--min-spread",       type=float, default=0.10)
-    parser.add_argument("--max-spread",       type=float, default=10.0)
-    parser.add_argument("--open-mult",        type=float, default=2.0)
-    parser.add_argument("--queue-aggression", type=float, default=0.3)
-    parser.add_argument("--max-inventory",    type=int,   default=5)
+    # V1 global params (used when --use-optimal-params is off,
+    # or as fallback for symbols not in the JSON)
+    parser.add_argument("--gamma",             type=float, default=0.001)
+    parser.add_argument("--kappa",             type=float, default=1.5)
+    parser.add_argument("--min-spread",        type=float, default=0.10)
+    parser.add_argument("--max-spread",        type=float, default=10.0)
+    parser.add_argument("--open-mult",         type=float, default=2.0)
+    parser.add_argument("--queue-aggression",  type=float, default=0.3)
+    parser.add_argument("--max-inventory",     type=int,   default=5)
 
-    # V2 params
+    # V2 global params
     parser.add_argument("--phi",   type=float, default=0.001)
     parser.add_argument("--rho",   type=float, default=0.30)
     parser.add_argument("--beta",  type=float, default=1.0)
@@ -325,7 +368,8 @@ def main():
 
     args = parser.parse_args()
 
-    params = {
+    # Global params (fallback when symbol not in optimal params JSON)
+    global_params = {
         'gamma':      args.gamma,
         'kappa':      args.kappa,
         'min_spread': args.min_spread,
@@ -344,16 +388,24 @@ def main():
 
     t0 = time.perf_counter()
 
+    opt_tag = " [OPTIMIZED PARAMS]" if args.use_optimal_params else ""
+
     print(f"\n{'='*70}")
-    print(f"  Batch Backtest — All Stock Futures  [Model: {args.model.upper()}]")
+    print(f"  Batch Backtest — All Stock Futures  "
+          f"[Model: {args.model.upper()}{opt_tag}]")
     print(f"  Period:  {args.start} -> {args.end}")
-    if args.model == 'v1':
-        print(f"  Params:  gamma={args.gamma} min_spread={args.min_spread} "
-              f"kappa={args.kappa} open_mult={args.open_mult}")
+    if not args.use_optimal_params:
+        if args.model == 'v1':
+            print(f"  Params:  gamma={args.gamma} min_spread={args.min_spread} "
+                  f"kappa={args.kappa} open_mult={args.open_mult}")
+        else:
+            print(f"  Params:  phi={args.phi} rho={args.rho} "
+                  f"beta={args.beta} eta={args.eta} nu={args.nu}")
     else:
-        print(f"  Params:  phi={args.phi} rho={args.rho} "
-              f"beta={args.beta} eta={args.eta} nu={args.nu} "
-              f"zeta={args.zeta}")
+        print(f"  Params:  Per-symbol from "
+              f"research/findings/{args.model}_optimal_params.json")
+        print(f"           Fallback: gamma={args.gamma} "
+              f"min_spread={args.min_spread}")
     print(f"  Workers: {args.workers}")
     print(f"{'='*70}\n")
 
@@ -372,7 +424,6 @@ def main():
     errors  = []
     counter = [0]
 
-    # Pick runner based on model
     run_one = run_one_v1 if args.model == 'v1' else run_one_v2
 
     print(f"{'#':>3} {'Symbol':<30} {'NetPnL':>12} "
@@ -395,17 +446,23 @@ def main():
               f"{r['win_rate']:>5.1f}%  "
               f"{r['sharpe']:>6.2f}")
 
+    def run_with_resolved_params(sym):
+        p = resolve_params(sym, global_params,
+                           args.use_optimal_params, args.model)
+        return run_one(sym, args.start, args.end,
+                       lot_sizes, p, args.min_bars)
+
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(run_one, sym, args.start, args.end,
-                        lot_sizes, params, args.min_bars): sym
+            pool.submit(run_with_resolved_params, sym): sym
             for sym in symbols
         }
         for future in as_completed(futures):
             handle_result(future.result())
 
     elapsed = time.perf_counter() - t0
-    print_results(results, errors, len(symbols), args.model)
+    print_results(results, errors, len(symbols),
+                  args.model, args.use_optimal_params)
     print(f"  Total time: {elapsed:.1f}s  "
           f"({elapsed/max(len(symbols),1):.2f}s per symbol)\n")
 

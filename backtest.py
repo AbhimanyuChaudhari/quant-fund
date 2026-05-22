@@ -22,8 +22,8 @@ Usage:
 """
 
 import argparse
-from src.backtest.engine import BacktestEngine, BacktestConfig
-from src.backtest.strategy import StrategyConfig
+from src.backtest.models.v1_avellaneda_stoikov.engine import BacktestEngine, BacktestConfig
+from src.backtest.models.v1_avellaneda_stoikov.strategy import StrategyConfig
 from src.backtest.mm_strategy import AvellanedaStoikovStrategy
 
 
@@ -90,7 +90,7 @@ def main():
 
     # Choose order book type
     if args.realistic:
-        from src.trading.fill_simulator import RealisticOrderBook
+        from src.backtest.models.v1_avellaneda_stoikov.fill_simulator import RealisticOrderBook
         from src.backtest.order_book import SimulatedOrderBook
         print(f"\nUsing REALISTIC fill simulation "
               f"(queue_aggression={args.queue_aggression})")

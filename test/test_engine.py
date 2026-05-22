@@ -10,7 +10,7 @@ from src.trading.order_manager import OrderManager
 print("Step 4: importing feature_engine...", flush=True)
 from src.trading.feature_engine import FeatureEngine
 print("Step 5: importing strategy...", flush=True)
-from src.backtest.strategy import StrategyConfig
+from src.backtest.models.v1_avellaneda_stoikov.strategy import StrategyConfig
 from src.backtest.mm_strategy import AvellanedaStoikovStrategy
 print("Step 6: importing engine...", flush=True)
 from src.trading.engine import LiveEngine

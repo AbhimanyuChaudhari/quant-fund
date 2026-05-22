@@ -313,7 +313,6 @@ class RealisticOrderBook:
                     self._book.inventory += result.filled_lots
                 else:
                     self._book.inventory -= result.filled_lots
-
         return fills
 
     @property

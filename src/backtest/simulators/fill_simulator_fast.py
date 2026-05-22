@@ -357,7 +357,7 @@ def compute_metrics_fast(
     if len(pnl_series) > 1:
         diffs = np.diff(pnl_series)
         std   = diffs.std()
-        if std > 0:
+        if std > 1e-4 and len(diffs) >= 5:
             sharpe = float((diffs.mean() / std) * np.sqrt(252))
 
     # Max drawdown

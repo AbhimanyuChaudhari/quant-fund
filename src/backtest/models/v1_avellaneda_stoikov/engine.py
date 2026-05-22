@@ -19,7 +19,7 @@ from typing import Type
 
 from src.backtest.data_loader import iter_bars
 from src.backtest.order_book import SimulatedOrderBook, Fill
-from src.backtest.strategy import BaseStrategy, StrategyConfig
+from src.backtest.models.v1_avellaneda_stoikov.strategy import BaseStrategy, StrategyConfig
 from src.backtest.metrics import compute_metrics, print_metrics, BacktestMetrics
 from src.backtest.transaction_costs import TransactionCosts
 

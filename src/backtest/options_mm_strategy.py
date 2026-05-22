@@ -29,7 +29,7 @@ import numpy as np
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 
-from src.backtest.strategy import BaseStrategy, StrategyConfig
+from src.backtest.models.v1_avellaneda_stoikov.strategy import BaseStrategy, StrategyConfig
 from src.trading.delta_hedger import DeltaHedger, HedgeAction
 
 logger = logging.getLogger(__name__)
