@@ -1010,7 +1010,7 @@ MONTH 3:
 
 ## Contact / Questions
 
-Ask your brother to share this with you after each week:
+share this after each week:
 1. Quality scores for top 20 symbols (does it make sense?)
 2. Earnings calendar (is it complete and accurate?)
 3. Notebook results (does quality predict MM performance?)
