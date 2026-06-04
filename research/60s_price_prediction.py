@@ -273,9 +273,7 @@ def main():
     print("Finding symbols...")
     try:
         fs    = gcsfs.GCSFileSystem(project=PROJECT_ID)
-        files = fs.glob(
-            f"{BUCKET_NAME}/processed/features/*26MAYFUT/*.parquet"
-        )
+        files = fs.glob(f"{BUCKET_NAME}/processed/features/*FUT/*.parquet")
         all_syms = set()
         for f in files:
             parts    = f.split("/")
