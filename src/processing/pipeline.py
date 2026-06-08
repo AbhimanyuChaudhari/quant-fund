@@ -216,15 +216,50 @@ def save_processed(df: pd.DataFrame, symbol: str, date: str):
     )
     print(f"Saved → GCS: {blob_name}")
 
+# ─────────────────────────────────────
+# Cleanup — delete raw files after processing
+# ADD THIS FUNCTION TO pipeline.py
+# ─────────────────────────────────────
+
+def delete_raw_ticks(symbol: str, date: str, keep_days: int = 1):
+    """
+    Delete raw tick files for a symbol/date after successful processing.
+    Keeps last keep_days days as safety net in case reprocessing needed.
+    """
+    from datetime import datetime, timedelta
+
+    # Don't delete if date is within keep_days of today
+    try:
+        file_date = datetime.strptime(date, '%Y-%m-%d').date()
+        cutoff    = datetime.today().date() - timedelta(days=keep_days)
+        if file_date >= cutoff:
+            print(f"  Keeping raw/{symbol}/{date} (within {keep_days}-day window)")
+            return
+    except Exception:
+        pass
+
+    bucket = get_bucket()
+    prefix = f"raw/orderbook/{symbol}/{date}/"
+    blobs  = list(bucket.list_blobs(prefix=prefix))
+
+    if not blobs:
+        return
+
+    for blob in blobs:
+        blob.delete()
+
+    print(f"  Deleted {len(blobs)} raw files: raw/orderbook/{symbol}/{date}/")
+
 
 # ─────────────────────────────────────
-# Main pipeline
+# UPDATED run_pipeline
+# Only change vs original: added delete_raw_ticks() after save_processed()
 # ─────────────────────────────────────
 
 def run_pipeline(symbol: str, date: str):
     """
     Full processing pipeline for one symbol and date.
-    Raw ticks → 1s bars → features → GCS
+    Raw ticks → 1s bars → features → GCS → delete raw
     """
     print(f"\n{'='*50}")
     print(f"Processing: {symbol} | {date}")
@@ -244,12 +279,18 @@ def run_pipeline(symbol: str, date: str):
     # Step 4 — Rolling features
     final = build_rolling_features(bars, micro)
 
-    # Step 5 — Save
+    # Step 5 — Save processed
     save_processed(final, symbol, date)
+
+    # Step 6 — Delete raw (only if save succeeded — got here without exception)
+    # Keeps yesterday's raw as 1-day safety net
+    delete_raw_ticks(symbol, date, keep_days=1)
 
     print(f"Done: {symbol} | {date}")
     return final
-
+# ─────────────────────────────────────
+# Main pipeline
+# ─────────────────────────────────────
 
 if __name__ == "__main__":
     # Test on available data
