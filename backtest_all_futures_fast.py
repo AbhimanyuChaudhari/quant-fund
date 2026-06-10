@@ -603,3 +603,77 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def run_backtest_all(
+    model:              str   = 'v1',
+    start_date:         str   = None,
+    end_date:           str   = None,
+    symbols:            list  = None,
+    use_optimal_params: bool  = True,
+    workers:            int   = 8,
+) -> list:
+    """
+    Library entry point for qf.py CLI.
+ 
+    Same logic as main() but returns results list instead of printing.
+    qf.py handles all display and formatting.
+ 
+    Args:
+        model:              'v1' or 'v2'
+        start_date:         'YYYY-MM-DD'
+        end_date:           'YYYY-MM-DD'
+        symbols:            list of symbols (default: auto-detect all)
+        use_optimal_params: use per-symbol optimized params
+        workers:            parallel threads
+ 
+    Returns:
+        List of result dicts with keys:
+            symbol, lot_size, net_pnl, gross_pnl, costs,
+            fills, win_rate, sharpe, max_dd, bars, ok
+    """
+    global_params = {
+        'gamma':      0.001,
+        'kappa':      1.5,
+        'min_spread': 0.10,
+        'max_spread': 10.0,
+        'open_mult':  2.0,
+        'queue_agg':  0.3,
+        'max_inv':    5,
+        'phi':        0.001,
+        'rho':        0.30,
+        'beta':       1.0,
+        'theta':      2.0,
+        'eta':        0.5,
+        'nu':         0.2,
+        'zeta':       0.5,
+    }
+ 
+    # Load lot sizes
+    lot_sizes = get_lot_sizes()
+ 
+    # Get symbols
+    if symbols is None:
+        symbols = get_symbols(start_date, end_date)
+ 
+    if not symbols:
+        return []
+ 
+    run_one = run_one_v1 if model == 'v1' else run_one_v2
+ 
+    results = []
+ 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+ 
+    def run_sym(sym):
+        p = resolve_params(sym, global_params, use_optimal_params, model)
+        return run_one(sym, start_date, end_date, lot_sizes, p)
+ 
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(run_sym, sym): sym for sym in symbols}
+        for future in as_completed(futures):
+            r = future.result()
+            if r['ok']:
+                results.append(r)
+ 
+    return sorted(results, key=lambda x: x['net_pnl'], reverse=True)
