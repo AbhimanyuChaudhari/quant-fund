@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 CACHE_DIR   = Path(__file__).resolve().parents[2] / "data" / "cache"
 CACHE_FILE  = CACHE_DIR / "backtest.duckdb"

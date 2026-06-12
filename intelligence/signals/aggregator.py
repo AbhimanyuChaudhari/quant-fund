@@ -64,7 +64,7 @@ log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GCS_BUCKET = "hedge-fund-494103-marketdata"
+GCS_BUCKET = "hedge-fund-494103-marketdata-mumbai"
 GCP_PROJECT = "hedge-fund-494103"
 
 # Signal TTL — how long before signal expires and mm_strategy uses defaults

@@ -56,7 +56,7 @@ log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GCS_BUCKET         = "hedge-fund-494103-marketdata"
+GCS_BUCKET         = "hedge-fund-494103-marketdata-mumbai"
 EVENTS_PREFIX      = "intelligence/events"
 SIGNALS_PREFIX     = "signals"
 

@@ -15,9 +15,9 @@ Schedule (set by scheduler_setup.sh):
     Runs at 8:30 PM IST daily (after pipeline.py finishes)
 
 GCS output:
-    gs://hedge-fund-494103-marketdata/params/v1_optimal_params.json
-    gs://hedge-fund-494103-marketdata/params/v2_optimal_params.json
-    gs://hedge-fund-494103-marketdata/params/transfer_log.json
+    gs://hedge-fund-494103-marketdata-mumbai/params/v1_optimal_params.json
+    gs://hedge-fund-494103-marketdata-mumbai/params/v2_optimal_params.json
+    gs://hedge-fund-494103-marketdata-mumbai/params/transfer_log.json
 
 Usage:
     python -m src.automation.rolling_optimizer
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-GCS_BUCKET       = 'hedge-fund-494103-marketdata'
+GCS_BUCKET       = 'hedge-fund-494103-marketdata-mumbai'
 GCS_PARAMS_DIR   = 'params'
 
 # Rolling grid search config

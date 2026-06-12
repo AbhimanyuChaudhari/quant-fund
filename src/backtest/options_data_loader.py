@@ -22,7 +22,7 @@ from typing import Optional, Iterator
 logger = logging.getLogger(__name__)
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 # NSE market hours filter (IST)
 MARKET_OPEN_IST  = 33300   # 09:15 IST

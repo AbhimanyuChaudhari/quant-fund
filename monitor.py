@@ -19,7 +19,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 GREEN  = "\033[92m"
 RED    = "\033[91m"

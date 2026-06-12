@@ -11,7 +11,7 @@ ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
 PROJECT_ID  = os.getenv("GCP_PROJECT_ID", "hedge-fund-494103")
-BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "hedge-fund-494103-marketdata")
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "hedge-fund-494103-marketdata-mumbai")
 
 
 def get_duckdb_con():

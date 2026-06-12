@@ -28,7 +28,7 @@ from google.cloud import storage
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GCS_BUCKET          = "hedge-fund-494103-marketdata"
+GCS_BUCKET          = "hedge-fund-494103-marketdata-mumbai"
 GCS_LOG_PREFIX      = "logs/gap_reports"
 PROCESSED_PREFIX    = "processed/features"
 

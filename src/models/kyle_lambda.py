@@ -52,7 +52,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-GCS_BUCKET         = "hedge-fund-494103-marketdata"
+GCS_BUCKET         = "hedge-fund-494103-marketdata-mumbai"
 PROCESSED_PREFIX   = "processed/features"
 MODELS_PREFIX      = "models/kyle_lambda"
 

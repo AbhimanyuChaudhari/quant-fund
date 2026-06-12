@@ -44,7 +44,7 @@ import gcsfs
 # ─────────────────────────────────────────────────────────────────────────────
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 OUTPUT_DIR  = Path("research/findings")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

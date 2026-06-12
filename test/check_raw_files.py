@@ -13,7 +13,7 @@ symbols = [
 
 for sym in symbols:
     files = sorted(fs.glob(
-        f'hedge-fund-494103-marketdata/raw/orderbook/{sym}/{today}/*.parquet'
+        f'hedge-fund-494103-marketdata-mumbai/raw/orderbook/{sym}/{today}/*.parquet'
     ))
     print(f'\n{sym}: {len(files)} files')
     for f in files:

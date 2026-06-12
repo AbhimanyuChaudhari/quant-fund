@@ -207,7 +207,7 @@ class IntelSignal:
     def load(
         cls,
         symbol:     str,
-        bucket:     str = "hedge-fund-494103-marketdata",
+        bucket:     str = "hedge-fund-494103-marketdata-mumbai",
         fallback:   bool = True,
     ) -> "IntelSignal":
         """
@@ -242,7 +242,7 @@ class IntelSignal:
 
     def save(
         self,
-        bucket: str = "hedge-fund-494103-marketdata",
+        bucket: str = "hedge-fund-494103-marketdata-mumbai",
         save_historical: bool = True,
     ) -> bool:
         """
@@ -325,7 +325,7 @@ class MMUniverse:
             "avoid":  [c.to_dict() for c in self.avoid],
         }
 
-    def save(self, bucket: str = "hedge-fund-494103-marketdata"):
+    def save(self, bucket: str = "hedge-fund-494103-marketdata-mumbai"):
         try:
             from google.cloud import storage
             client = storage.Client()
@@ -338,7 +338,7 @@ class MMUniverse:
             return False
 
     @classmethod
-    def load(cls, bucket: str = "hedge-fund-494103-marketdata") -> Optional["MMUniverse"]:
+    def load(cls, bucket: str = "hedge-fund-494103-marketdata-mumbai") -> Optional["MMUniverse"]:
         try:
             from google.cloud import storage
             client = storage.Client()

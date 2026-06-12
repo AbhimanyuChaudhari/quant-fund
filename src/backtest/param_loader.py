@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-GCS_BUCKET     = 'hedge-fund-494103-marketdata'
+GCS_BUCKET     = 'hedge-fund-494103-marketdata-mumbai'
 GCS_PARAMS_DIR = 'params'
 
 # Regex to strip contract suffix

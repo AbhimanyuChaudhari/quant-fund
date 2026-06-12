@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-GCS_BUCKET         = 'hedge-fund-494103-marketdata'
+GCS_BUCKET         = 'hedge-fund-494103-marketdata-mumbai'
 GCS_PARAMS_DIR     = 'params'
 GCS_SNAPSHOTS_DIR  = 'params/snapshots'
 GCS_ARCHIVE_DIR    = 'params/archive'

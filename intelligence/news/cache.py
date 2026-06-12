@@ -55,7 +55,7 @@ class IntelCache:
     def __init__(
         self,
         ttl_minutes:   int = CACHE_TTL_MINUTES,
-        bucket:        str = "hedge-fund-494103-marketdata",
+        bucket:        str = "hedge-fund-494103-marketdata-mumbai",
     ):
         self.ttl_minutes = ttl_minutes
         self.bucket      = bucket
@@ -169,7 +169,7 @@ _global_cache: Optional[IntelCache] = None
 
 def get_cache(
     ttl_minutes: int = CACHE_TTL_MINUTES,
-    bucket:      str = "hedge-fund-494103-marketdata",
+    bucket:      str = "hedge-fund-494103-marketdata-mumbai",
 ) -> IntelCache:
     """
     Get or create the global cache singleton.

@@ -3,7 +3,7 @@ import gcsfs
 fs = gcsfs.GCSFileSystem(project='hedge-fund-494103')
 
 # List all folders under raw/orderbook/ to see what's there
-folders = fs.ls('hedge-fund-494103-marketdata/raw/orderbook/')
+folders = fs.ls('hedge-fund-494103-marketdata-mumbai/raw/orderbook/')
 print(f"Total symbols in GCS: {len(folders)}")
 print("\nSample folders:")
 for f in sorted(folders)[:20]:

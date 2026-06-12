@@ -40,7 +40,7 @@ from src.backtest.data_loader import load_day
 from src.backtest.param_loader import get_symbol_params
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 # Index futures base names — excluded from stock futures backtest
 INDEX_BASES = {

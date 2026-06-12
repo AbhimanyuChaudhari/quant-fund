@@ -39,7 +39,7 @@ def get_processed_bar_counts() -> dict:
             date   = parts[3].replace(".parquet", "")
             try:
                 # Read only metadata — does not download full file
-                gcs_path = f"gs://hedge-fund-494103-marketdata/{f}"
+                gcs_path = f"gs://hedge-fund-494103-marketdata-mumbai/{f}"
                 pf       = pq.read_metadata(gcs_path, filesystem=fs)
                 n_rows   = pf.num_rows
                 counts[(symbol, date)] = n_rows

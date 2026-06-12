@@ -75,7 +75,7 @@ log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-GCS_BUCKET      = "hedge-fund-494103-marketdata"
+GCS_BUCKET      = "hedge-fund-494103-marketdata-mumbai"
 GCP_PROJECT     = "hedge-fund-494103"
 SECRET_NAME     = "ANTHROPIC_API_KEY"
 

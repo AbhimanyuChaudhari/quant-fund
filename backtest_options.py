@@ -28,7 +28,7 @@ from src.trading.delta_hedger import DeltaHedger
 logging.basicConfig(level=logging.WARNING)
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 LOT_SIZES = {
     "NIFTY":     75,

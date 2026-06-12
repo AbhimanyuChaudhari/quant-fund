@@ -15,7 +15,7 @@ df = con.execute("""
         AVG(ask_q1)     as avg_ask_q1,
         AVG(total_bid_qty) as avg_total_bid,
         COUNT(*)        as total_bars
-    FROM read_parquet('gs://hedge-fund-494103-marketdata/processed/features/NIFTY26MAYFUT/2026-04-30.parquet')
+    FROM read_parquet('gs://hedge-fund-494103-marketdata-mumbai/processed/features/NIFTY26MAYFUT/2026-04-30.parquet')
 """).df()
 
 print("NIFTY Apr 30 volume stats:")

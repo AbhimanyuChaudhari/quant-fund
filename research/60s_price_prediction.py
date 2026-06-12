@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 # ─────────────────────────────────────────────────────────────────────────────
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 INDEX_FUTURES = {
     "NIFTY26MAYFUT", "BANKNIFTY26MAYFUT",

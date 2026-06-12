@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 fs  = gcsfs.GCSFileSystem(project=PROJECT_ID)
 con = duckdb.connect()

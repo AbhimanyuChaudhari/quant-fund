@@ -18,7 +18,7 @@ try:
             AVG(CASE WHEN delta IS NOT NULL THEN ABS(delta) END) as avg_abs_delta,
             MIN(ts_ist) as first_bar,
             MAX(ts_ist) as last_bar
-        FROM read_parquet('gs://hedge-fund-494103-marketdata/processed/options/BANKNIFTY/2026-05-05.parquet')
+        FROM read_parquet('gs://hedge-fund-494103-marketdata-mumbai/processed/options/BANKNIFTY/2026-05-05.parquet')
     """).fetchone()
 
     print(f"Total bars:    {row[0]:,}")
@@ -41,7 +41,7 @@ try:
     print("\nSample data (ATM options):")
     sample = con.execute("""
         SELECT symbol, ts_ist, close, iv, delta, gamma, theta, spread_mean
-        FROM read_parquet('gs://hedge-fund-494103-marketdata/processed/options/BANKNIFTY/2026-05-05.parquet')
+        FROM read_parquet('gs://hedge-fund-494103-marketdata-mumbai/processed/options/BANKNIFTY/2026-05-05.parquet')
         WHERE close > 10 AND iv > 0
         ORDER BY ts_ist
         LIMIT 5

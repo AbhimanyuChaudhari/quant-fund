@@ -2,7 +2,7 @@ import gcsfs
 from datetime import date, timedelta
 
 PROJECT_ID  = "hedge-fund-494103"
-BUCKET_NAME = "hedge-fund-494103-marketdata"
+BUCKET_NAME = "hedge-fund-494103-marketdata-mumbai"
 
 fs = gcsfs.GCSFileSystem(project=PROJECT_ID)
 

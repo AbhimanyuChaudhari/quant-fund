@@ -7,7 +7,7 @@ con.register_filesystem(fs)
 
 for symbol in ['USDINR26508FUT', 'USDINR26515FUT']:
     for date in ['2026-05-01', '2026-05-02']:
-        path = (f"gs://hedge-fund-494103-marketdata/processed/"
+        path = (f"gs://hedge-fund-494103-marketdata-mumbai/processed/"
                 f"features/{symbol}/{date}.parquet")
         try:
             row = con.execute(f"""
